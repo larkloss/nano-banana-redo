@@ -1,11 +1,11 @@
 import { GoogleGenAI } from '@google/genai'
-import type { ParsedResponse, ReferenceImage, Settings } from '../types'
+import type { ParsedImagePart, ParsedResponse, Settings } from '../types'
 import { getModel } from './models'
 
 export interface GenerateParams {
   apiKey: string
   settings: Settings
-  references: ReferenceImage[]
+  references: ParsedImagePart[]
 }
 
 export type GenerateCaller = (params: GenerateParams, signal: AbortSignal) => Promise<ParsedResponse>

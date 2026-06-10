@@ -1,7 +1,13 @@
 # Nano Banana Redo
 
-A zero-backend web app for generating **Abigail Chase** fan art with Google's Gemini
-image models (the "Nano Banana" family), modeled after the Google AI Studio UI.
+Two zero-backend web apps built on Google's Gemini image models (the "Nano Banana"
+family), modeled after the Google AI Studio UI:
+
+1. **Generator** (`nano-banana.html` / `index.html`) — **Abigail Chase** fan-art
+   generation with auto-retry until the target image count is reached.
+2. **Region editor** (`nano-banana-edit.html` / `edit.html`) — 局部重绘: upload an
+   image, select region(s) with rectangle/ellipse/lasso tools, and have the model
+   re-render only that region — everything outside stays pixel-identical.
 
 Its core feature is an **auto-retry engine**: when a generation fails (safety/moderation
 block, empty response, transient API error), it automatically re-runs until the target
@@ -9,8 +15,10 @@ number of images is collected — no human intervention needed.
 
 ## Quick start — no install needed
 
-Download [`nano-banana.html`](./nano-banana.html) (one self-contained file, all JS/CSS
-inlined) and double-click it to open in your browser. That's it — no npm, no server.
+Download [`nano-banana.html`](./nano-banana.html) (generator) or
+[`nano-banana-edit.html`](./nano-banana-edit.html) (region editor) — each is one
+self-contained file, all JS/CSS inlined — and double-click to open in your browser.
+That's it — no npm, no server.
 
 Paste your [Google AI Studio API key](https://aistudio.google.com/apikey) into the
 **API key** field in the right-hand settings panel, enter your prompt, and hit **Run**.
@@ -69,18 +77,43 @@ npm run dev
 The **Stop** button aborts instantly, including mid-request and mid-backoff; collected
 images are kept.
 
+## How the region editor works
+
+The Gemini API has no native mask/inpainting parameter, so the editor implements it:
+
+1. Your selection (rectangle/ellipse/lasso shapes, unioned) is rasterized into a
+   black/white mask; the model receives `[original image, mask image, instruction]`
+   and is told to re-render only the white region.
+2. The returned image is scaled to the original size, then **auto-aligned**: nano
+   banana outputs are often shifted a few pixels, so a coarse-to-fine grid search
+   over the outside-mask pixels estimates the translation (a documented quirk that
+   Photoshop users fix with Auto-Align Layers).
+3. The aligned result is composited through an **inward-feathered** mask: alpha is
+   exactly 0 outside the selection, so outside pixels are bit-for-bit the original;
+   the feather ramp hides the seam at the boundary.
+4. Results where the model returned the image unchanged (another documented quirk)
+   or changed the framing are detected automatically and retried, like moderation
+   failures, up to the attempts cap.
+
+Accepted edits become the new base image, so edits can be chained (with Back history).
+The whole pipeline runs in browser Canvas — no server, no Python.
+
 ## Mock mode (no quota needed)
 
-Append `?mock=1` to the URL to swap the API for a scripted fake that cycles through
-success → moderation block → 429 with retryDelay → safety block → empty response → success,
-so you can watch the retry engine work without spending API quota.
+Append `?mock=1` to the URL to swap the API for a scripted fake, so you can watch the
+retry engine work without spending API quota. The generator cycles success → moderation
+block → 429 with retryDelay → safety block → empty response → success. The editor cycles
+a real masked edit with a deliberate (+5, −3)px misalignment (exercising the aligner
+end-to-end) → unchanged-image no-op → 429 → clean edit.
 
 ## Scripts
 
 ```bash
-npm run dev           # dev server
-npm run build         # type-check + production build (dist/)
-npm run build:single  # rebuild the self-contained nano-banana.html
-npm run lint          # eslint
-npm run preview       # serve the production build
+npm run dev               # dev server (generator at /, editor at /edit.html)
+npm run build             # type-check + production build of both pages (dist/)
+npm run build:single      # rebuild the self-contained nano-banana.html
+npm run build:single:edit # rebuild the self-contained nano-banana-edit.html
+npm run build:singles     # rebuild both single-file artifacts
+npm run lint              # eslint
+npm run preview           # serve the production build
 ```

@@ -1,4 +1,4 @@
-import type { AttemptOutcome, EngineEvent, LaneStatus, ReferenceImage, RunSummary, Settings } from '../types'
+import type { AttemptOutcome, EngineEvent, LaneStatus, ParsedImagePart, RunSummary, Settings } from '../types'
 import type { GenerateCaller, GenerateParams } from './gemini'
 import { classifyError, classifyResponse } from './errors'
 
@@ -10,7 +10,7 @@ const BACKOFF_MAX_MS = 60000
 export interface RunParams {
   keys: string[]
   settings: Settings
-  references: ReferenceImage[]
+  references: ParsedImagePart[]
 }
 
 type LaneExit = 'done' | 'cap' | 'fatal' | 'stopped'

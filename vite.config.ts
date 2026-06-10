@@ -3,13 +3,19 @@ import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { viteSingleFile } from 'vite-plugin-singlefile'
 
-// https://vite.dev/config/
-export default defineConfig(({ mode }) => ({
-  plugins: [
-    react(),
-    tailwindcss(),
-    // `vite build --mode single` produces a self-contained dist/index.html
-    // (all JS/CSS inlined) that runs from a file:// double-click — no npm needed.
-    ...(mode === 'single' ? [viteSingleFile()] : []),
-  ],
-}))
+// `vite build --mode single` / `--mode single-edit` each produce one
+// self-contained HTML (all JS/CSS inlined) that runs from a file://
+// double-click — no npm needed. vite-plugin-singlefile can't handle
+// multiple entries, so single-file artifacts are built one at a time.
+export default defineConfig(({ mode }) => {
+  const singleEntry = mode === 'single' ? 'index.html' : mode === 'single-edit' ? 'edit.html' : null
+  const input: Record<string, string> = singleEntry
+    ? { app: singleEntry }
+    : { main: 'index.html', edit: 'edit.html' }
+  return {
+    plugins: [react(), tailwindcss(), ...(singleEntry ? [viteSingleFile()] : [])],
+    build: {
+      rollupOptions: { input },
+    },
+  }
+})

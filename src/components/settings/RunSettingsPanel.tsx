@@ -150,7 +150,7 @@ export function RunSettingsPanel({ settings, onUpdate, apiKeys, onApiKeyChange, 
   )
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+export function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div>
       <div className="mb-1.5 text-xs font-medium text-zinc-400">{label}</div>
@@ -159,7 +159,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   )
 }
 
-function Chip({
+export function Chip({
   active,
   onClick,
   disabled,

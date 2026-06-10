@@ -8,7 +8,9 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "build:single": "tsc -b && vite build --mode single && cp dist/index.html nano-banana.html"
+    "build:single": "tsc -b && vite build --mode single && cp dist/index.html nano-banana.html",
+    "build:single:edit": "tsc -b && vite build --mode single-edit && cp dist/edit.html nano-banana-edit.html",
+    "build:singles": "npm run build:single && npm run build:single:edit"
   },
   "dependencies": {
     "@google/genai": "^2.8.0",
