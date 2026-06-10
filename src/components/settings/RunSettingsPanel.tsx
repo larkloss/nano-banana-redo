@@ -39,6 +39,21 @@ export function RunSettingsPanel({ settings, onUpdate, apiKey, onApiKeyChange, d
         <p className="mt-1 text-[10px] text-zinc-600">{model.description}</p>
       </Field>
 
+      <Field label="System instructions">
+        <textarea
+          value={settings.systemInstruction}
+          onChange={(e) => onUpdate({ systemInstruction: e.target.value })}
+          disabled={disabled}
+          placeholder="Optional tone and style instructions for the model…"
+          rows={4}
+          spellCheck={false}
+          className="w-full resize-y rounded-md border border-zinc-700 bg-zinc-900 px-2.5 py-2 text-xs leading-relaxed text-zinc-200 placeholder-zinc-600 outline-none focus:border-blue-500 disabled:opacity-50"
+        />
+        <p className="mt-1 text-[10px] text-zinc-600">
+          Sent with every attempt, separate from the prompt. Leave empty to send none.
+        </p>
+      </Field>
+
       <Field label="Aspect ratio">
         <div className="flex flex-wrap gap-1.5">
           <Chip

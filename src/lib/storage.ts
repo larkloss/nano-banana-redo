@@ -6,6 +6,7 @@ const API_KEY_KEY = 'nbr.apiKey'
 
 export const DEFAULT_SETTINGS: Settings = {
   modelId: MODELS[0].id,
+  systemInstruction: '',
   aspectRatio: 'auto',
   imageSize: '1K',
   format: 'png',
@@ -26,6 +27,7 @@ export function loadSettings(): Settings {
     }
     if (!['1K', '2K', '4K'].includes(parsed.imageSize)) parsed.imageSize = '1K'
     if (parsed.format !== 'jpg') parsed.format = 'png'
+    if (typeof parsed.systemInstruction !== 'string') parsed.systemInstruction = ''
     parsed.targetCount = clampInt(parsed.targetCount, 1, 12, 5)
     parsed.attemptsCap = clampInt(parsed.attemptsCap, 1, 50, 15)
     return parsed

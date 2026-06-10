@@ -35,6 +35,9 @@ npm run dev
 
 - **Models**: Nano Banana 2 (`gemini-3.1-flash-image`), Nano Banana Pro
   (`gemini-3-pro-image-preview`), Nano Banana (`gemini-2.5-flash-image`)
+- **System instructions**: optional AI Studio-style instruction box below the model
+  selector, sent as `systemInstruction` with every attempt (auto-falls back to prepending
+  it to the prompt if a model rejects the field)
 - **Aspect ratio**: Auto (model decides / follows reference) or explicit — 1:1, 2:3, 3:2,
   3:4, 4:3, 4:5, 5:4, 9:16, 16:9, 21:9 (+ 1:4, 4:1, 1:8, 8:1 on Gemini 3.x)
 - **Image size**: 1K / 2K / 4K (Gemini 3.x models; hidden for 2.5)

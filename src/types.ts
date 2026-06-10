@@ -6,6 +6,7 @@ export type OutputFormat = 'png' | 'jpg'
 
 export interface Settings {
   modelId: string
+  systemInstruction: string
   aspectRatio: AspectRatio
   imageSize: ImageSize
   format: OutputFormat
