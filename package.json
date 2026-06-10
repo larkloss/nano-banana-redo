@@ -7,7 +7,10 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "build:single": "tsc -b && vite build --mode single && cp dist/index.html nano-banana.html",
+    "build:single:edit": "tsc -b && vite build --mode single-edit && cp dist/edit.html nano-banana-edit.html",
+    "build:singles": "npm run build:single && npm run build:single:edit"
   },
   "dependencies": {
     "@google/genai": "^2.8.0",
@@ -29,6 +32,7 @@
     "globals": "^17.6.0",
     "typescript": "~6.0.2",
     "typescript-eslint": "^8.59.2",
-    "vite": "^8.0.12"
+    "vite": "^8.0.12",
+    "vite-plugin-singlefile": "^2.3.3"
   }
 }

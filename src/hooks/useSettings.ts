@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Settings } from '../types'
-import { loadSettings, saveSettings, loadApiKey, saveApiKey } from '../lib/storage'
+import { loadSettings, saveSettings, loadApiKeys, saveApiKey } from '../lib/storage'
 import { getModel } from '../lib/models'
 
 export function useSettings() {
   const [settings, setSettings] = useState<Settings>(loadSettings)
-  const [apiKey, setApiKeyState] = useState<string>(loadApiKey)
+  const [apiKeys, setApiKeysState] = useState<[string, string]>(loadApiKeys)
   const saveTimer = useRef<number | undefined>(undefined)
 
   useEffect(() => {
@@ -33,10 +33,14 @@ export function useSettings() {
     })
   }
 
-  const setApiKey = (key: string) => {
-    setApiKeyState(key)
-    saveApiKey(key)
+  const setApiKey = (index: 0 | 1, key: string) => {
+    setApiKeysState((prev) => {
+      const next: [string, string] = [...prev]
+      next[index] = key
+      return next
+    })
+    saveApiKey(index, key)
   }
 
-  return { settings, update, apiKey, setApiKey }
+  return { settings, update, apiKeys, setApiKey }
 }

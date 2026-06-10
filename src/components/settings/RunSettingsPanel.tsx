@@ -5,8 +5,8 @@ import { ApiKeySection } from './ApiKeySection'
 interface Props {
   settings: Settings
   onUpdate: (patch: Partial<Settings>) => void
-  apiKey: string
-  onApiKeyChange: (key: string) => void
+  apiKeys: [string, string]
+  onApiKeyChange: (index: 0 | 1, key: string) => void
   disabled: boolean
 }
 
@@ -16,7 +16,7 @@ const FORMATS = [
   { value: 'jpg', label: 'JPG' },
 ] as const
 
-export function RunSettingsPanel({ settings, onUpdate, apiKey, onApiKeyChange, disabled }: Props) {
+export function RunSettingsPanel({ settings, onUpdate, apiKeys, onApiKeyChange, disabled }: Props) {
   const model = getModel(settings.modelId)
 
   return (
@@ -37,6 +37,21 @@ export function RunSettingsPanel({ settings, onUpdate, apiKey, onApiKeyChange, d
           ))}
         </select>
         <p className="mt-1 text-[10px] text-zinc-600">{model.description}</p>
+      </Field>
+
+      <Field label="System instructions">
+        <textarea
+          value={settings.systemInstruction}
+          onChange={(e) => onUpdate({ systemInstruction: e.target.value })}
+          disabled={disabled}
+          placeholder="Optional tone and style instructions for the model…"
+          rows={4}
+          spellCheck={false}
+          className="w-full resize-y rounded-md border border-zinc-700 bg-zinc-900 px-2.5 py-2 text-xs leading-relaxed text-zinc-200 placeholder-zinc-600 outline-none focus:border-blue-500 disabled:opacity-50"
+        />
+        <p className="mt-1 text-[10px] text-zinc-600">
+          Sent with every attempt, separate from the prompt. Leave empty to send none.
+        </p>
       </Field>
 
       <Field label="Aspect ratio">
@@ -129,13 +144,13 @@ export function RunSettingsPanel({ settings, onUpdate, apiKey, onApiKeyChange, d
       </Field>
 
       <div className="mt-auto border-t border-zinc-800 pt-4">
-        <ApiKeySection apiKey={apiKey} onChange={onApiKeyChange} />
+        <ApiKeySection apiKeys={apiKeys} onChange={onApiKeyChange} />
       </div>
     </aside>
   )
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+export function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div>
       <div className="mb-1.5 text-xs font-medium text-zinc-400">{label}</div>
@@ -144,7 +159,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   )
 }
 
-function Chip({
+export function Chip({
   active,
   onClick,
   disabled,

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { RunState } from '../../types'
+import type { LaneState, RunState } from '../../types'
 
 interface Props {
   runState: RunState
@@ -38,6 +38,13 @@ export function RunBar({ runState, isRunning, canRun, runDisabledHint, onRun, on
         )}
         <StatusLine runState={runState} isRunning={isRunning} />
       </div>
+      {isRunning && runState.lanes.length > 1 && (
+        <div className="flex flex-wrap gap-2">
+          {runState.lanes.map((laneState, i) => (
+            <LaneChip key={i} index={i} lane={laneState} />
+          ))}
+        </div>
+      )}
       <ProgressBar runState={runState} isRunning={isRunning} />
       {!canRun && !isRunning && runDisabledHint && (
         <p className="text-xs text-amber-400/90">{runDisabledHint}</p>
@@ -47,12 +54,15 @@ export function RunBar({ runState, isRunning, canRun, runDisabledHint, onRun, on
 }
 
 function StatusLine({ runState, isRunning }: { runState: RunState; isRunning: boolean }) {
-  const backoffSeconds = useCountdown(runState.backoffUntil)
-
   if (runState.status === 'idle') {
-    return <span className="text-xs text-zinc-500">Ready — generation auto-retries until the target count is reached.</span>
+    return (
+      <span className="text-xs text-zinc-500">
+        Ready — generation auto-retries until the target count is reached.
+      </span>
+    )
   }
 
+  const singleLaneBackoff = runState.lanes.length === 1 ? runState.lanes[0] : null
   const counters = (
     <>
       Collected <b className="text-zinc-200">{runState.collected}/{runState.target}</b>
@@ -66,19 +76,18 @@ function StatusLine({ runState, isRunning }: { runState: RunState; isRunning: bo
       <span className="text-xs text-zinc-400">
         <span className="mr-2 inline-block h-2 w-2 animate-pulse rounded-full bg-blue-400 align-middle" />
         {counters}
-        {runState.status === 'backoff' && backoffSeconds !== null && (
+        {singleLaneBackoff?.status === 'backoff' ? (
           <>
             <span className="mx-2 text-zinc-700">·</span>
-            <span className="text-amber-400">
-              {runState.lastFailure} — retrying in {backoffSeconds}s
-            </span>
+            <BackoffText lane={singleLaneBackoff} />
           </>
-        )}
-        {runState.status === 'running' && runState.lastFailure && (
-          <>
-            <span className="mx-2 text-zinc-700">·</span>
-            <span className="text-amber-400/80">last: {runState.lastFailure}</span>
-          </>
+        ) : (
+          runState.lastFailure && (
+            <>
+              <span className="mx-2 text-zinc-700">·</span>
+              <span className="text-amber-400/80">last: {runState.lastFailure}</span>
+            </>
+          )
         )}
       </span>
     )
@@ -88,8 +97,8 @@ function StatusLine({ runState, isRunning }: { runState: RunState; isRunning: bo
     complete: <span className="text-emerald-400">Done — all {runState.target} images collected.</span>,
     'cap-reached': (
       <span className="text-amber-400">
-        Attempt cap reached — collected {runState.collected}/{runState.target}. Raise "Max attempts" or
-        adjust the prompt to continue.
+        Attempt cap reached — collected {runState.collected}/{runState.target}. Raise "Max attempts"
+        or adjust the prompt to continue.
       </span>
     ),
     stopped: <span className="text-zinc-400">Stopped — kept {runState.collected} image(s).</span>,
@@ -98,8 +107,38 @@ function StatusLine({ runState, isRunning }: { runState: RunState; isRunning: bo
 
   return (
     <span className="text-xs">
-      {counters !== null && <span className="mr-3 text-zinc-500">{counters}</span>}
+      <span className="mr-3 text-zinc-500">{counters}</span>
       {banner}
+    </span>
+  )
+}
+
+function LaneChip({ index, lane }: { index: number; lane: LaneState }) {
+  const style = {
+    idle: 'border-zinc-700 text-zinc-500',
+    running: 'border-blue-500/40 bg-blue-500/10 text-blue-300',
+    backoff: 'border-amber-500/40 bg-amber-500/10 text-amber-300',
+    done: 'border-zinc-700 text-zinc-500',
+    dead: 'border-red-500/40 bg-red-500/10 text-red-300',
+  }[lane.status]
+
+  return (
+    <span className={`rounded-md border px-2 py-1 text-[10px] ${style}`} title={lane.lastReason ?? undefined}>
+      Key {index + 1}:{' '}
+      {lane.status === 'running' && 'generating…'}
+      {lane.status === 'idle' && 'waiting'}
+      {lane.status === 'done' && 'finished'}
+      {lane.status === 'backoff' && <BackoffText lane={lane} />}
+      {lane.status === 'dead' && `stopped — ${lane.lastReason ?? 'error'}`}
+    </span>
+  )
+}
+
+function BackoffText({ lane }: { lane: LaneState }) {
+  const seconds = useCountdown(lane.backoffUntil)
+  return (
+    <span className="text-amber-400">
+      {lane.lastReason ?? 'Rate limited'} — retrying{seconds !== null ? ` in ${seconds}s` : '…'}
     </span>
   )
 }

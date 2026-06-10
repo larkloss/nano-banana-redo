@@ -6,6 +6,7 @@ export type OutputFormat = 'png' | 'jpg'
 
 export interface Settings {
   modelId: string
+  systemInstruction: string
   aspectRatio: AspectRatio
   imageSize: ImageSize
   format: OutputFormat
@@ -38,11 +39,18 @@ export interface GeneratedImage {
 export type RunStatus =
   | 'idle'
   | 'running'
-  | 'backoff'
   | 'complete'
   | 'cap-reached'
   | 'stopped'
   | 'error'
+
+export type LaneStatus = 'idle' | 'running' | 'backoff' | 'done' | 'dead'
+
+export interface LaneState {
+  status: LaneStatus
+  lastReason: string | null
+  backoffUntil: number | null
+}
 
 export interface RunState {
   status: RunStatus
@@ -50,8 +58,8 @@ export interface RunState {
   target: number
   attempts: number
   cap: number
+  lanes: LaneState[]
   lastFailure: string | null
-  backoffUntil: number | null
   errorMessage: string | null
 }
 
@@ -76,10 +84,10 @@ export type AttemptOutcome =
   | { kind: 'aborted' }
 
 export type EngineEvent =
-  | { type: 'image'; image: ParsedImagePart; attempt: number }
+  | { type: 'image'; image: ParsedImagePart; attempt: number; lane: number }
   | { type: 'progress'; collected: number; attempts: number; cap: number }
-  | { type: 'failure'; reason: string; attempts: number; cap: number }
-  | { type: 'backoff'; delayMs: number; reason: string }
+  | { type: 'failure'; reason: string; attempts: number; cap: number; lane: number }
+  | { type: 'lane'; lane: number; status: LaneStatus; reason?: string; backoffUntil?: number }
 
 export interface RunSummary {
   result: 'complete' | 'cap-reached' | 'stopped' | 'error'

@@ -1,84 +1,136 @@
-import type { AttemptOutcome, EngineEvent, RunSummary } from '../types'
+import type { AttemptOutcome, EngineEvent, LaneStatus, ParsedImagePart, RunSummary, Settings } from '../types'
 import type { GenerateCaller, GenerateParams } from './gemini'
 import { classifyError, classifyResponse } from './errors'
 
-// Consecutive transient failures (429/5xx/network) before giving up entirely.
+// Consecutive transient failures (429/5xx/network) before a lane gives up.
 const MAX_CONSECUTIVE_TRANSIENT = 6
 const BACKOFF_BASE_MS = 2000
 const BACKOFF_MAX_MS = 60000
 
+export interface RunParams {
+  keys: string[]
+  settings: Settings
+  references: ParsedImagePart[]
+}
+
+type LaneExit = 'done' | 'cap' | 'fatal' | 'stopped'
+
+// One worker lane per API key, all racing against shared counters:
+// `collected` (target) and `attemptsStarted` (cap). attempts count completed
+// generation calls (success + moderation + empty); transient errors (429/5xx)
+// back off per-lane without consuming the cap. Near the target both lanes may
+// have a call in flight, so a run can overshoot by up to keys.length-1 images.
 export async function runGeneration(
   call: GenerateCaller,
-  params: GenerateParams,
+  params: RunParams,
   signal: AbortSignal,
   onEvent: (event: EngineEvent) => void,
 ): Promise<RunSummary> {
   const { targetCount, attemptsCap } = params.settings
-  let collected = 0
-  // attempts counts completed generation calls (success + moderation + empty);
-  // transient errors (429/5xx) have their own consecutive budget and don't consume the cap.
-  let attempts = 0
-  let consecutiveTransient = 0
+  const shared = { collected: 0, attemptsStarted: 0, attemptsCompleted: 0 }
+  const fatalMessages: string[] = []
 
-  while (collected < targetCount && attempts < attemptsCap) {
-    if (signal.aborted) return summary('stopped', collected, attempts)
+  const laneEvent = (lane: number, status: LaneStatus, reason?: string, backoffUntil?: number) =>
+    onEvent({ type: 'lane', lane, status, reason, backoffUntil })
 
-    let outcome: AttemptOutcome
-    try {
-      const parsed = await call(params, signal)
-      outcome = classifyResponse(parsed)
-    } catch (err) {
-      outcome = classifyError(err)
-    }
+  async function worker(lane: number, apiKey: string): Promise<LaneExit> {
+    let consecutiveTransient = 0
+    const callParams: GenerateParams = { apiKey, settings: params.settings, references: params.references }
 
-    switch (outcome.kind) {
-      case 'success': {
-        attempts += 1
-        consecutiveTransient = 0
-        for (const image of outcome.images) {
-          if (collected >= targetCount) break
-          collected += 1
-          onEvent({ type: 'image', image, attempt: attempts })
+    while (true) {
+      if (signal.aborted) return 'stopped'
+      if (shared.collected >= targetCount) {
+        laneEvent(lane, 'done')
+        return 'done'
+      }
+      if (shared.attemptsStarted >= attemptsCap) {
+        laneEvent(lane, 'done')
+        return 'cap'
+      }
+
+      shared.attemptsStarted += 1
+      laneEvent(lane, 'running')
+
+      let outcome: AttemptOutcome
+      try {
+        const parsed = await call(callParams, signal)
+        outcome = classifyResponse(parsed)
+      } catch (err) {
+        outcome = classifyError(err)
+      }
+
+      switch (outcome.kind) {
+        case 'success': {
+          shared.attemptsCompleted += 1
+          consecutiveTransient = 0
+          for (const image of outcome.images) {
+            shared.collected += 1
+            onEvent({ type: 'image', image, attempt: shared.attemptsCompleted, lane })
+          }
+          onEvent({
+            type: 'progress',
+            collected: shared.collected,
+            attempts: shared.attemptsCompleted,
+            cap: attemptsCap,
+          })
+          break
         }
-        onEvent({ type: 'progress', collected, attempts, cap: attemptsCap })
-        break
-      }
-      case 'moderation':
-      case 'empty': {
-        attempts += 1
-        consecutiveTransient = 0
-        onEvent({ type: 'failure', reason: outcome.reason, attempts, cap: attemptsCap })
-        break
-      }
-      case 'transient': {
-        consecutiveTransient += 1
-        if (consecutiveTransient > MAX_CONSECUTIVE_TRANSIENT) {
-          return summary('error', collected, attempts, `Giving up after repeated errors: ${outcome.reason}`)
+        case 'moderation':
+        case 'empty': {
+          shared.attemptsCompleted += 1
+          consecutiveTransient = 0
+          onEvent({
+            type: 'failure',
+            reason: outcome.reason,
+            attempts: shared.attemptsCompleted,
+            cap: attemptsCap,
+            lane,
+          })
+          break
         }
-        const delayMs =
-          outcome.retryDelayMs ??
-          Math.min(BACKOFF_BASE_MS * 2 ** (consecutiveTransient - 1) + Math.random() * 500, BACKOFF_MAX_MS)
-        onEvent({ type: 'backoff', delayMs, reason: outcome.reason })
-        await sleep(delayMs, signal)
-        break
+        case 'transient': {
+          // Refund the reservation — transient errors don't consume the cap
+          shared.attemptsStarted -= 1
+          consecutiveTransient += 1
+          if (consecutiveTransient > MAX_CONSECUTIVE_TRANSIENT) {
+            const message = `Key ${lane + 1}: giving up after repeated errors (${outcome.reason})`
+            fatalMessages.push(message)
+            laneEvent(lane, 'dead', message)
+            return 'fatal'
+          }
+          const delayMs =
+            outcome.retryDelayMs ??
+            Math.min(BACKOFF_BASE_MS * 2 ** (consecutiveTransient - 1) + Math.random() * 500, BACKOFF_MAX_MS)
+          laneEvent(lane, 'backoff', outcome.reason, Date.now() + delayMs)
+          await sleep(delayMs, signal)
+          break
+        }
+        case 'fatal': {
+          const message = `Key ${lane + 1}: ${outcome.message}`
+          fatalMessages.push(message)
+          laneEvent(lane, 'dead', message)
+          return 'fatal'
+        }
+        case 'aborted':
+          return 'stopped'
       }
-      case 'fatal':
-        return summary('error', collected, attempts, outcome.message)
-      case 'aborted':
-        return summary('stopped', collected, attempts)
     }
   }
 
-  return summary(collected >= targetCount ? 'complete' : 'cap-reached', collected, attempts)
-}
+  const exits = await Promise.all(params.keys.map((key, i) => worker(i, key)))
 
-function summary(
-  result: RunSummary['result'],
-  collected: number,
-  attempts: number,
-  errorMessage?: string,
-): RunSummary {
-  return { result, collected, attempts, errorMessage }
+  let result: RunSummary['result']
+  if (signal.aborted) result = 'stopped'
+  else if (shared.collected >= targetCount) result = 'complete'
+  else if (exits.length > 0 && exits.every((e) => e === 'fatal' || e === 'stopped')) result = 'error'
+  else result = 'cap-reached'
+
+  return {
+    result,
+    collected: shared.collected,
+    attempts: shared.attemptsCompleted,
+    errorMessage: result === 'error' ? fatalMessages.join(' · ') || 'No usable API key' : undefined,
+  }
 }
 
 function sleep(ms: number, signal: AbortSignal): Promise<void> {

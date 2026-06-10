@@ -2,10 +2,11 @@ import type { Settings } from '../types'
 import { MODELS, getModel } from './models'
 
 const SETTINGS_KEY = 'nbr.settings.v1'
-const API_KEY_KEY = 'nbr.apiKey'
+const API_KEY_KEYS = ['nbr.apiKey', 'nbr.apiKey2'] as const
 
 export const DEFAULT_SETTINGS: Settings = {
   modelId: MODELS[0].id,
+  systemInstruction: '',
   aspectRatio: 'auto',
   imageSize: '1K',
   format: 'png',
@@ -26,6 +27,7 @@ export function loadSettings(): Settings {
     }
     if (!['1K', '2K', '4K'].includes(parsed.imageSize)) parsed.imageSize = '1K'
     if (parsed.format !== 'jpg') parsed.format = 'png'
+    if (typeof parsed.systemInstruction !== 'string') parsed.systemInstruction = ''
     parsed.targetCount = clampInt(parsed.targetCount, 1, 12, 5)
     parsed.attemptsCap = clampInt(parsed.attemptsCap, 1, 50, 15)
     return parsed
@@ -42,18 +44,18 @@ export function saveSettings(settings: Settings): void {
   }
 }
 
-export function loadApiKey(): string {
+export function loadApiKeys(): [string, string] {
   try {
-    return localStorage.getItem(API_KEY_KEY) ?? ''
+    return [localStorage.getItem(API_KEY_KEYS[0]) ?? '', localStorage.getItem(API_KEY_KEYS[1]) ?? '']
   } catch {
-    return ''
+    return ['', '']
   }
 }
 
-export function saveApiKey(key: string): void {
+export function saveApiKey(index: 0 | 1, key: string): void {
   try {
-    if (key) localStorage.setItem(API_KEY_KEY, key)
-    else localStorage.removeItem(API_KEY_KEY)
+    if (key) localStorage.setItem(API_KEY_KEYS[index], key)
+    else localStorage.removeItem(API_KEY_KEYS[index])
   } catch {
     // ignore
   }
