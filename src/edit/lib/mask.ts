@@ -23,6 +23,7 @@ export function tracePath(ctx: CanvasRenderingContext2D | OffscreenCanvasRenderi
   } else if (shape.kind === 'ellipse') {
     ctx.ellipse(shape.cx, shape.cy, shape.rx, shape.ry, 0, 0, Math.PI * 2)
   } else {
+    // lasso and polygon: closed point path
     const [first, ...rest] = shape.points
     if (!first) return
     ctx.moveTo(first.x, first.y)

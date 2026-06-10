@@ -16,6 +16,7 @@ interface Props {
 const TOOLS: { value: Tool; label: string; icon: string }[] = [
   { value: 'rect', label: 'Rectangle', icon: '▭' },
   { value: 'ellipse', label: 'Ellipse', icon: '◯' },
+  { value: 'polygon', label: 'Polygon', icon: '⬠' },
   { value: 'lasso', label: 'Lasso', icon: '✎' },
 ]
 

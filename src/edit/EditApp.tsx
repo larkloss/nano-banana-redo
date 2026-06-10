@@ -162,6 +162,9 @@ export function EditApp() {
               disabled={isRunning}
             />
             <MaskCanvas
+              // Remount on tool/image change so unfinished drafts (e.g. an open
+              // polygon) are discarded
+              key={`${tool}-${base.objectUrl}`}
               image={base}
               tool={tool}
               shapes={shapes}

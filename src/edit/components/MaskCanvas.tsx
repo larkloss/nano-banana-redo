@@ -24,6 +24,10 @@ export function MaskCanvas({ image, tool, shapes, onCommitShape, disabled }: Pro
   const [fit, setFit] = useState<FitState | null>(null)
   const [draft, setDraft] = useState<Shape | null>(null)
   const dragRef = useRef<{ pointerId: number; anchor: { x: number; y: number } } | null>(null)
+  // Polygon tool: click to place vertices; close via first-vertex click or double-click
+  const [polyPoints, setPolyPoints] = useState<{ x: number; y: number }[]>([])
+  const [cursor, setCursor] = useState<{ x: number; y: number } | null>(null)
+  const CLOSE_RADIUS_CSS = 10
 
   // Fit-to-container math, recomputed on resize
   useEffect(() => {
@@ -65,7 +69,34 @@ export function MaskCanvas({ image, tool, shapes, onCommitShape, disabled }: Pro
     }
     for (const shape of shapes) drawShape(shape, false)
     if (draft) drawShape(draft, true)
-  }, [fit, shapes, draft, image])
+
+    // Polygon draft: open polyline + rubber band to cursor + first-vertex handle
+    if (polyPoints.length > 0) {
+      ctx.beginPath()
+      ctx.moveTo(polyPoints[0].x, polyPoints[0].y)
+      for (const p of polyPoints.slice(1)) ctx.lineTo(p.x, p.y)
+      ctx.lineWidth = 1.5 / fit.s
+      ctx.setLineDash([])
+      ctx.strokeStyle = 'rgba(147, 197, 253, 0.95)'
+      ctx.stroke()
+      if (cursor) {
+        ctx.beginPath()
+        ctx.moveTo(polyPoints[polyPoints.length - 1].x, polyPoints[polyPoints.length - 1].y)
+        ctx.lineTo(cursor.x, cursor.y)
+        ctx.setLineDash([6 / fit.s, 4 / fit.s])
+        ctx.stroke()
+      }
+      const closable =
+        polyPoints.length >= 3 &&
+        cursor !== null &&
+        Math.hypot(cursor.x - polyPoints[0].x, cursor.y - polyPoints[0].y) * fit.s <= CLOSE_RADIUS_CSS
+      ctx.beginPath()
+      ctx.arc(polyPoints[0].x, polyPoints[0].y, (closable ? 7 : 5) / fit.s, 0, Math.PI * 2)
+      ctx.setLineDash([])
+      ctx.fillStyle = closable ? 'rgba(52, 211, 153, 0.9)' : 'rgba(147, 197, 253, 0.9)'
+      ctx.fill()
+    }
+  }, [fit, shapes, draft, image, polyPoints, cursor])
 
   const toImage = useCallback(
     (e: { clientX: number; clientY: number }): { x: number; y: number } => {
@@ -102,19 +133,53 @@ export function MaskCanvas({ image, tool, shapes, onCommitShape, disabled }: Pro
     [tool],
   )
 
+  const commitPolygon = useCallback(
+    (points: { x: number; y: number }[]) => {
+      setPolyPoints([])
+      setCursor(null)
+      if (points.length >= 3) onCommitShape({ kind: 'polygon', points })
+    },
+    [onCommitShape],
+  )
+
   const onPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (disabled || !e.isPrimary || e.button !== 0) return
     const anchor = toImage(e)
+    if (tool === 'polygon') {
+      const s = fit?.s ?? 1
+      const first = polyPoints[0]
+      if (
+        polyPoints.length >= 3 &&
+        first &&
+        Math.hypot(anchor.x - first.x, anchor.y - first.y) * s <= CLOSE_RADIUS_CSS
+      ) {
+        commitPolygon(polyPoints)
+      } else {
+        setPolyPoints((prev) => [...prev, anchor])
+      }
+      return
+    }
     dragRef.current = { pointerId: e.pointerId, anchor }
     e.currentTarget.setPointerCapture(e.pointerId)
     setDraft(tool === 'lasso' ? { kind: 'lasso', points: [anchor] } : makeDraft(anchor, anchor, null))
   }
 
   const onPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (tool === 'polygon') {
+      if (polyPoints.length > 0) setCursor(toImage(e))
+      return
+    }
     const drag = dragRef.current
     if (!drag || e.pointerId !== drag.pointerId) return
     const p = toImage(e)
     setDraft((prev) => makeDraft(drag.anchor, p, prev))
+  }
+
+  const onDoubleClick = () => {
+    if (tool !== 'polygon' || polyPoints.length < 3) return
+    // The double-click's two pointerdowns each appended a vertex at the same
+    // spot; drop the duplicate before closing
+    commitPolygon(polyPoints.slice(0, -1))
   }
 
   const endDrag = (commit: boolean) => {
@@ -131,14 +196,18 @@ export function MaskCanvas({ image, tool, shapes, onCommitShape, disabled }: Pro
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && dragRef.current) {
+      if (e.key === 'Escape') {
         dragRef.current = null
         setDraft(null)
+        setPolyPoints([])
+        setCursor(null)
+      } else if (e.key === 'Enter' && tool === 'polygon' && polyPoints.length >= 3) {
+        commitPolygon(polyPoints)
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [])
+  }, [tool, polyPoints, commitPolygon])
 
   return (
     <div ref={containerRef} className="relative h-[52vh] min-h-72 w-full overflow-hidden rounded-xl bg-zinc-900/40">
@@ -165,7 +234,13 @@ export function MaskCanvas({ image, tool, shapes, onCommitShape, disabled }: Pro
             onPointerMove={onPointerMove}
             onPointerUp={onPointerUp}
             onPointerCancel={() => endDrag(false)}
+            onDoubleClick={onDoubleClick}
           />
+          {tool === 'polygon' && polyPoints.length > 0 && (
+            <span className="absolute bottom-2 left-1/2 -translate-x-1/2 rounded bg-zinc-900/90 px-3 py-1 text-[10px] text-zinc-300">
+              Click to add points · click the first point, double-click, or press Enter to close · Esc to cancel
+            </span>
+          )}
         </>
       )}
     </div>
@@ -175,5 +250,5 @@ export function MaskCanvas({ image, tool, shapes, onCommitShape, disabled }: Pro
 function isDegenerate(shape: Shape): boolean {
   if (shape.kind === 'rect') return Math.abs((shape.x1 - shape.x0) * (shape.y1 - shape.y0)) < 4
   if (shape.kind === 'ellipse') return shape.rx * shape.ry * Math.PI < 4
-  return shape.points.length < 3
+  return shape.points.length < 3 // lasso and polygon
 }
