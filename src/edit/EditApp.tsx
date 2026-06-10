@@ -58,7 +58,7 @@ export function EditApp() {
     return () => window.removeEventListener('keydown', onKey)
   }, [isRunning])
 
-  // Feather changes after a run re-composite existing candidates (debounced)
+  // Feather/blend changes after a run re-composite existing candidates (debounced)
   useEffect(() => {
     if (!base || candidates.length === 0 || isRunning) return
     clearTimeout(featherTimer.current)
@@ -67,7 +67,7 @@ export function EditApp() {
     }, 300)
     return () => clearTimeout(featherTimer.current)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [settings.feather])
+  }, [settings.feather, settings.seamless])
 
   const loadImage = (image: BaseImage) => {
     setBase((prev) => {

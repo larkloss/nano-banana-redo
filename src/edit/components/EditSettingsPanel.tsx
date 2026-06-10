@@ -85,6 +85,23 @@ export function EditSettingsPanel({ settings, onUpdate, apiKeys, onApiKeyChange,
         </p>
       </Field>
 
+      <Field label="Seamless blend">
+        <label className="flex cursor-pointer items-center gap-2 text-xs text-zinc-300">
+          <input
+            type="checkbox"
+            checked={settings.seamless}
+            onChange={(e) => onUpdate({ seamless: e.target.checked })}
+            disabled={disabled}
+            className="accent-blue-500"
+          />
+          Tone match + seam smoothing + grain match
+        </label>
+        <p className="mt-1 text-[10px] text-zinc-600">
+          Corrects the model's global tone shift and diffuses the residual boundary difference into
+          the region (Poisson-style), so the patch doesn't look pasted on.
+        </p>
+      </Field>
+
       <Field label="Max attempts">
         <input
           type="number"

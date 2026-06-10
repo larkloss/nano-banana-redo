@@ -63,6 +63,7 @@ export function useEditEngine() {
             settings.feather,
             analysis,
             settings.format,
+            settings.seamless,
           ).then((blob) => {
             setCandidates((prev) => [
               ...prev,
@@ -145,6 +146,7 @@ export function useEditEngine() {
         settings.feather,
         candidate.offset,
         settings.format,
+        settings.seamless,
       )
       setCandidates((prev) =>
         prev.map((c) => {

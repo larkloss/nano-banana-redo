@@ -33,6 +33,7 @@ export interface EditSettings {
   candidates: number
   attemptsCap: number
   feather: number
+  seamless: boolean
   format: OutputFormat
   prompt: string
 }

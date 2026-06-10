@@ -10,6 +10,7 @@ export const DEFAULT_EDIT_SETTINGS: EditSettings = {
   candidates: 1,
   attemptsCap: 6,
   feather: 12,
+  seamless: true,
   format: 'png',
   prompt: '',
 }
@@ -25,6 +26,7 @@ export function loadEditSettings(): EditSettings {
     if (!['1K', '2K', '4K'].includes(parsed.imageSize)) parsed.imageSize = '1K'
     if (parsed.format !== 'jpg') parsed.format = 'png'
     if (typeof parsed.prompt !== 'string') parsed.prompt = ''
+    if (typeof parsed.seamless !== 'boolean') parsed.seamless = true
     parsed.candidates = clampInt(parsed.candidates, 1, 4, 1)
     parsed.attemptsCap = clampInt(parsed.attemptsCap, 1, 20, 6)
     parsed.feather = clampInt(parsed.feather, 0, 64, 12)
