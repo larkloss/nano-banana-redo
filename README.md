@@ -7,15 +7,25 @@ Its core feature is an **auto-retry engine**: when a generation fails (safety/mo
 block, empty response, transient API error), it automatically re-runs until the target
 number of images is collected — no human intervention needed.
 
-## Quick start
+## Quick start — no install needed
+
+Download [`nano-banana.html`](./nano-banana.html) (one self-contained file, all JS/CSS
+inlined) and double-click it to open in your browser. That's it — no npm, no server.
+
+Paste your [Google AI Studio API key](https://aistudio.google.com/apikey) into the
+**API key** field in the right-hand settings panel, enter your prompt, and hit **Run**.
+
+Alternatively, host it on GitHub Pages: the included workflow
+(`.github/workflows/deploy.yml`) builds and deploys on every push to `main` — just set
+**Settings → Pages → Source** to "GitHub Actions" once (public repo, or private with a
+paid plan).
+
+## Quick start — with npm
 
 ```bash
 npm install
 npm run dev
 ```
-
-Open the printed URL, paste your [Google AI Studio API key](https://aistudio.google.com/apikey)
-into the **API key** field in the right-hand settings panel, enter your prompt, and hit **Run**.
 
 > The API key is stored in your browser's localStorage and sent directly from the browser
 > to the Gemini API. This is fine for personal/local use — never deploy this app publicly
@@ -60,8 +70,9 @@ so you can watch the retry engine work without spending API quota.
 ## Scripts
 
 ```bash
-npm run dev      # dev server
-npm run build    # type-check + production build (dist/)
-npm run lint     # eslint
-npm run preview  # serve the production build
+npm run dev           # dev server
+npm run build         # type-check + production build (dist/)
+npm run build:single  # rebuild the self-contained nano-banana.html
+npm run lint          # eslint
+npm run preview       # serve the production build
 ```
