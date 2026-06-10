@@ -47,6 +47,11 @@ npm run dev
 - **Target count + attempts cap**: pick how many images you want (1–12); the engine keeps
   rerunning failed attempts until it collects that many or hits the configurable max-attempts
   safety cap (so a permanently blocked prompt can't burn quota forever)
+- **Dual-lane parallel generation**: add an optional second API key and two requests run
+  concurrently, sharing the same target count and attempts cap. Each lane backs off
+  independently on rate limits, and if one key dies (invalid/blocked) the other lane keeps
+  going. Note: Gemini rate limits are per Google Cloud *project*, so the two keys must come
+  from different projects to actually double throughput
 - **Gallery**: lightbox view, per-image download, download-all as zip
 - Settings, prompt, and API key persist across reloads (localStorage)
 

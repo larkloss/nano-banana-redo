@@ -5,8 +5,8 @@ import { ApiKeySection } from './ApiKeySection'
 interface Props {
   settings: Settings
   onUpdate: (patch: Partial<Settings>) => void
-  apiKey: string
-  onApiKeyChange: (key: string) => void
+  apiKeys: [string, string]
+  onApiKeyChange: (index: 0 | 1, key: string) => void
   disabled: boolean
 }
 
@@ -16,7 +16,7 @@ const FORMATS = [
   { value: 'jpg', label: 'JPG' },
 ] as const
 
-export function RunSettingsPanel({ settings, onUpdate, apiKey, onApiKeyChange, disabled }: Props) {
+export function RunSettingsPanel({ settings, onUpdate, apiKeys, onApiKeyChange, disabled }: Props) {
   const model = getModel(settings.modelId)
 
   return (
@@ -144,7 +144,7 @@ export function RunSettingsPanel({ settings, onUpdate, apiKey, onApiKeyChange, d
       </Field>
 
       <div className="mt-auto border-t border-zinc-800 pt-4">
-        <ApiKeySection apiKey={apiKey} onChange={onApiKeyChange} />
+        <ApiKeySection apiKeys={apiKeys} onChange={onApiKeyChange} />
       </div>
     </aside>
   )

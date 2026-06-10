@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState } from 'react'
-import type { EngineEvent, GeneratedImage, ReferenceImage, RunState, Settings } from '../types'
+import type { EngineEvent, GeneratedImage, LaneState, ReferenceImage, RunState, Settings } from '../types'
 import { callGenerate } from '../lib/gemini'
 import { mockCallGenerate, isMockMode } from '../lib/mockGemini'
 import { runGeneration } from '../lib/retryEngine'
@@ -11,8 +11,8 @@ const IDLE_STATE: RunState = {
   target: 0,
   attempts: 0,
   cap: 0,
+  lanes: [],
   lastFailure: null,
-  backoffUntil: null,
   errorMessage: null,
 }
 
@@ -22,8 +22,8 @@ export function useGenerationEngine() {
   const abortRef = useRef<AbortController | null>(null)
   const runningRef = useRef(false)
 
-  const start = useCallback(async (apiKey: string, settings: Settings, references: ReferenceImage[]) => {
-    if (runningRef.current) return
+  const start = useCallback(async (keys: string[], settings: Settings, references: ReferenceImage[]) => {
+    if (runningRef.current || keys.length === 0) return
     runningRef.current = true
     const controller = new AbortController()
     abortRef.current = controller
@@ -34,8 +34,8 @@ export function useGenerationEngine() {
       target: settings.targetCount,
       attempts: 0,
       cap: settings.attemptsCap,
+      lanes: keys.map<LaneState>(() => ({ status: 'idle', lastReason: null, backoffUntil: null })),
       lastFailure: null,
-      backoffUntil: null,
       errorMessage: null,
     })
 
@@ -45,52 +45,44 @@ export function useGenerationEngine() {
           attempt: event.attempt,
           modelId: settings.modelId,
         }).then((img) => setImages((prev) => [img, ...prev]))
-        setRunState((prev) => ({
-          ...prev,
-          status: 'running',
-          collected: prev.collected + 1,
-          backoffUntil: null,
-        }))
+        setRunState((prev) => ({ ...prev, collected: prev.collected + 1 }))
       } else if (event.type === 'progress') {
-        setRunState((prev) => ({
-          ...prev,
-          status: 'running',
-          attempts: event.attempts,
-          backoffUntil: null,
-        }))
+        setRunState((prev) => ({ ...prev, attempts: event.attempts }))
       } else if (event.type === 'failure') {
         setRunState((prev) => ({
           ...prev,
-          status: 'running',
           attempts: event.attempts,
-          lastFailure: event.reason,
-          backoffUntil: null,
+          lastFailure: prev.lanes.length > 1 ? `Key ${event.lane + 1}: ${event.reason}` : event.reason,
         }))
-      } else if (event.type === 'backoff') {
+      } else if (event.type === 'lane') {
         setRunState((prev) => ({
           ...prev,
-          status: 'backoff',
-          lastFailure: event.reason,
-          backoffUntil: Date.now() + event.delayMs,
+          lanes: prev.lanes.map((laneState, i) =>
+            i === event.lane
+              ? {
+                  status: event.status,
+                  lastReason: event.reason ?? laneState.lastReason,
+                  backoffUntil: event.status === 'backoff' ? (event.backoffUntil ?? null) : null,
+                }
+              : laneState,
+          ),
         }))
       }
     }
 
     const caller = isMockMode() ? mockCallGenerate : callGenerate
     try {
-      const summary = await runGeneration(caller, { apiKey, settings, references }, controller.signal, onEvent)
+      const summary = await runGeneration(caller, { keys, settings, references }, controller.signal, onEvent)
       setRunState((prev) => ({
         ...prev,
         status: summary.result,
         attempts: summary.attempts,
-        backoffUntil: null,
         errorMessage: summary.errorMessage ?? null,
       }))
     } catch (err) {
       setRunState((prev) => ({
         ...prev,
         status: 'error',
-        backoffUntil: null,
         errorMessage: err instanceof Error ? err.message : String(err),
       }))
     } finally {
@@ -111,7 +103,7 @@ export function useGenerationEngine() {
     setRunState(IDLE_STATE)
   }, [])
 
-  const isRunning = runState.status === 'running' || runState.status === 'backoff'
+  const isRunning = runState.status === 'running'
 
   return { runState, images, start, stop, clearImages, isRunning }
 }

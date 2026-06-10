@@ -9,12 +9,17 @@ import { Gallery } from './components/gallery/Gallery'
 import { isMockMode } from './lib/mockGemini'
 
 function App() {
-  const { settings, update, apiKey, setApiKey } = useSettings()
+  const { settings, update, apiKeys, setApiKey } = useSettings()
   const { runState, images, start, stop, clearImages, isRunning } = useGenerationEngine()
   const [references, setReferences] = useState<ReferenceImage[]>([])
 
   const mock = isMockMode()
-  const runDisabledHint = !apiKey && !mock
+  const activeKeys = mock
+    ? apiKeys.filter(Boolean).length > 0
+      ? apiKeys.filter(Boolean)
+      : ['mock']
+    : apiKeys.filter(Boolean)
+  const runDisabledHint = activeKeys.length === 0
     ? 'Set your Google AI Studio API key in the settings panel first.'
     : !settings.prompt.trim()
       ? 'Enter a prompt first.'
@@ -53,7 +58,7 @@ function App() {
           isRunning={isRunning}
           canRun={canRun}
           runDisabledHint={runDisabledHint}
-          onRun={() => void start(apiKey, settings, references)}
+          onRun={() => void start(activeKeys, settings, references)}
           onStop={stop}
         />
         <Gallery images={images} onClear={clearImages} isRunning={isRunning} />
@@ -61,7 +66,7 @@ function App() {
       <RunSettingsPanel
         settings={settings}
         onUpdate={update}
-        apiKey={apiKey}
+        apiKeys={apiKeys}
         onApiKeyChange={setApiKey}
         disabled={isRunning}
       />
