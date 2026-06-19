@@ -3,6 +3,7 @@ export interface ModelInfo {
   label: string
   description: string
   supportsImageSize: boolean
+  supportsThinking: boolean
   aspectRatios: string[]
 }
 
@@ -13,8 +14,9 @@ export const MODELS: ModelInfo[] = [
   {
     id: 'gemini-3.1-flash-image',
     label: 'Nano Banana 2',
-    description: 'Gemini 3.1 Flash Image · fast, up to 4K',
+    description: 'Gemini 3.1 Flash Image · fast, up to 4K · high thinking',
     supportsImageSize: true,
+    supportsThinking: true,
     aspectRatios: EXTENDED_RATIOS,
   },
   {
@@ -22,6 +24,7 @@ export const MODELS: ModelInfo[] = [
     label: 'Nano Banana Pro',
     description: 'Gemini 3 Pro Image · highest quality, up to 4K',
     supportsImageSize: true,
+    supportsThinking: false,
     aspectRatios: EXTENDED_RATIOS,
   },
   {
@@ -29,6 +32,7 @@ export const MODELS: ModelInfo[] = [
     label: 'Nano Banana',
     description: 'Gemini 2.5 Flash Image · 1K only',
     supportsImageSize: false,
+    supportsThinking: false,
     aspectRatios: BASE_RATIOS,
   },
 ]
