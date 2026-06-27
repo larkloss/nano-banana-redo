@@ -2,7 +2,10 @@ import type { Settings } from '../types'
 import { MODELS, getModel } from './models'
 
 const SETTINGS_KEY = 'nbr.settings.v1'
-const API_KEY_KEYS = ['nbr.apiKey', 'nbr.apiKey2'] as const
+const API_KEY_KEYS = ['nbr.apiKey', 'nbr.apiKey2', 'nbr.apiKey3'] as const
+
+export type ApiKeys = [string, string, string]
+export type ApiKeyIndex = 0 | 1 | 2
 
 export const DEFAULT_SETTINGS: Settings = {
   modelId: MODELS[0].id,
@@ -44,15 +47,19 @@ export function saveSettings(settings: Settings): void {
   }
 }
 
-export function loadApiKeys(): [string, string] {
+export function loadApiKeys(): ApiKeys {
   try {
-    return [localStorage.getItem(API_KEY_KEYS[0]) ?? '', localStorage.getItem(API_KEY_KEYS[1]) ?? '']
+    return [
+      localStorage.getItem(API_KEY_KEYS[0]) ?? '',
+      localStorage.getItem(API_KEY_KEYS[1]) ?? '',
+      localStorage.getItem(API_KEY_KEYS[2]) ?? '',
+    ]
   } catch {
-    return ['', '']
+    return ['', '', '']
   }
 }
 
-export function saveApiKey(index: 0 | 1, key: string): void {
+export function saveApiKey(index: ApiKeyIndex, key: string): void {
   try {
     if (key) localStorage.setItem(API_KEY_KEYS[index], key)
     else localStorage.removeItem(API_KEY_KEYS[index])

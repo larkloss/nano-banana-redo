@@ -5,8 +5,8 @@ import { ApiKeySection } from './ApiKeySection'
 interface Props {
   settings: Settings
   onUpdate: (patch: Partial<Settings>) => void
-  apiKeys: [string, string]
-  onApiKeyChange: (index: 0 | 1, key: string) => void
+  apiKeys: [string, string, string]
+  onApiKeyChange: (index: 0 | 1 | 2, key: string) => void
   disabled: boolean
 }
 

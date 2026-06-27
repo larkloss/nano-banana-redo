@@ -8,8 +8,8 @@ import { ApiKeySection } from '../../components/settings/ApiKeySection'
 interface Props {
   settings: EditSettings
   onUpdate: (patch: Partial<EditSettings>) => void
-  apiKeys: [string, string]
-  onApiKeyChange: (index: 0 | 1, key: string) => void
+  apiKeys: [string, string, string]
+  onApiKeyChange: (index: 0 | 1 | 2, key: string) => void
   disabled: boolean
 }
 
