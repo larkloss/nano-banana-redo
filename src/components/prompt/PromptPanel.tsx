@@ -2,6 +2,7 @@ import { useState } from 'react'
 import type { ReferenceImage } from '../../types'
 import { ReferenceImageStrip } from './ReferenceImageStrip'
 import { fileToReference } from '../../lib/imageUtils'
+import { saveTextAsMarkdown, promptFilename } from '../../lib/saveText'
 
 interface Props {
   prompt: string
@@ -52,12 +53,24 @@ export function PromptPanel({ prompt, onPromptChange, references, onReferencesCh
           Drop reference images
         </div>
       )}
+      <div className="mb-2 flex items-center justify-between">
+        <span className="text-xs font-medium text-zinc-400">Prompt</span>
+        <button
+          type="button"
+          onClick={() => void saveTextAsMarkdown(prompt, promptFilename())}
+          disabled={!prompt.trim()}
+          title="Save the prompt as a .md file — Chrome/Edge ask where to save it"
+          className="rounded-md border border-zinc-700 px-2.5 py-1 text-[10px] text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 disabled:opacity-40"
+        >
+          ↓ Save prompt (.md)
+        </button>
+      </div>
       <textarea
         value={prompt}
         onChange={(e) => onPromptChange(e.target.value)}
         disabled={disabled}
         placeholder="Describe the Abigail Chase artwork you want… (your fixed prompt goes here)"
-        rows={6}
+        rows={8}
         spellCheck={false}
         className="w-full resize-y rounded-md bg-transparent text-sm leading-relaxed text-zinc-200 placeholder-zinc-600 outline-none disabled:opacity-60"
       />

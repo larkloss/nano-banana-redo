@@ -10,6 +10,7 @@ import { EditSettingsPanel } from './components/EditSettingsPanel'
 import { ResultsPanel } from './components/ResultsPanel'
 import { RunBar } from '../components/run/RunBar'
 import { isMockMode } from '../lib/mockGemini'
+import { saveTextAsMarkdown, promptFilename } from '../lib/saveText'
 
 const HISTORY_LIMIT = 8
 
@@ -171,15 +172,28 @@ export function EditApp() {
               onCommitShape={(shape) => setShapes((prev) => [...prev, shape])}
               disabled={isRunning}
             />
-            <textarea
-              value={settings.prompt}
-              onChange={(e) => update({ prompt: e.target.value })}
-              disabled={isRunning}
-              placeholder="What should be rendered inside the selected region? e.g. replace the jacket with medieval armor…"
-              rows={3}
-              spellCheck={false}
-              className="w-full resize-y rounded-xl border border-zinc-800 bg-zinc-900/60 p-4 text-sm leading-relaxed text-zinc-200 placeholder-zinc-600 outline-none focus:border-blue-500 disabled:opacity-60"
-            />
+            <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 focus-within:border-blue-500">
+              <textarea
+                value={settings.prompt}
+                onChange={(e) => update({ prompt: e.target.value })}
+                disabled={isRunning}
+                placeholder="What should be rendered inside the selected region? e.g. replace the jacket with medieval armor…"
+                rows={4}
+                spellCheck={false}
+                className="w-full resize-y bg-transparent p-4 text-sm leading-relaxed text-zinc-200 placeholder-zinc-600 outline-none disabled:opacity-60"
+              />
+              <div className="flex justify-end border-t border-zinc-800 px-3 py-1.5">
+                <button
+                  type="button"
+                  onClick={() => void saveTextAsMarkdown(settings.prompt, promptFilename())}
+                  disabled={!settings.prompt.trim()}
+                  title="Save the prompt as a .md file — Chrome/Edge ask where to save it"
+                  className="rounded-md border border-zinc-700 px-2.5 py-1 text-[10px] text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 disabled:opacity-40"
+                >
+                  ↓ Save prompt (.md)
+                </button>
+              </div>
+            </div>
             <RunBar
               runState={runState}
               isRunning={isRunning}

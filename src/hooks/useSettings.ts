@@ -25,10 +25,6 @@ export function useSettings() {
         }
         if (!model.supportsImageSize) next.imageSize = '1K'
       }
-      // Suggest a proportional attempts cap when target count changes
-      if (patch.targetCount !== undefined && patch.attemptsCap === undefined) {
-        next.attemptsCap = Math.min(50, Math.max(next.targetCount, patch.targetCount * 3))
-      }
       return next
     })
   }

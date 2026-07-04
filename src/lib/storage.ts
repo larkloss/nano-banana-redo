@@ -3,6 +3,9 @@ import { MODELS, getModel } from './models'
 
 const SETTINGS_KEY = 'nbr.settings.v1'
 const API_KEY_KEYS = ['nbr.apiKey', 'nbr.apiKey2', 'nbr.apiKey3'] as const
+// One-shot marker: bumps previously-persisted attempts caps to the new
+// default of 50 without resetting any other stored settings
+const CAP_MIGRATION_KEY = 'nbr.capDefault50'
 
 export type ApiKeys = [string, string, string]
 export type ApiKeyIndex = 0 | 1 | 2
@@ -14,11 +17,12 @@ export const DEFAULT_SETTINGS: Settings = {
   imageSize: '1K',
   format: 'png',
   targetCount: 5,
-  attemptsCap: 15,
+  attemptsCap: 50,
   prompt: '',
 }
 
 export function loadSettings(): Settings {
+  const migrateCap = consumeCapMigration(CAP_MIGRATION_KEY)
   try {
     const raw = localStorage.getItem(SETTINGS_KEY)
     if (!raw) return DEFAULT_SETTINGS
@@ -32,10 +36,27 @@ export function loadSettings(): Settings {
     if (parsed.format !== 'jpg') parsed.format = 'png'
     if (typeof parsed.systemInstruction !== 'string') parsed.systemInstruction = ''
     parsed.targetCount = clampInt(parsed.targetCount, 1, 12, 5)
-    parsed.attemptsCap = clampInt(parsed.attemptsCap, 1, 50, 15)
+    parsed.attemptsCap = clampInt(parsed.attemptsCap, 1, 200, 50)
+    if (migrateCap) {
+      parsed.attemptsCap = DEFAULT_SETTINGS.attemptsCap
+      saveSettings(parsed)
+    }
     return parsed
   } catch {
     return DEFAULT_SETTINGS
+  }
+}
+
+// Returns true exactly once per browser profile, then never again — so the
+// new default is applied to already-persisted settings a single time and any
+// later user choice sticks.
+export function consumeCapMigration(markerKey: string): boolean {
+  try {
+    if (localStorage.getItem(markerKey)) return false
+    localStorage.setItem(markerKey, '1')
+    return true
+  } catch {
+    return false
   }
 }
 

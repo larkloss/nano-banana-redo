@@ -4,6 +4,7 @@ import { MODELS } from '../../lib/models'
 import { EDIT_MODELS } from '../lib/storage'
 import { Field, Chip } from '../../components/settings/RunSettingsPanel'
 import { ApiKeySection } from '../../components/settings/ApiKeySection'
+import { MaxAttemptsControl } from '../../components/settings/MaxAttemptsControl'
 
 interface Props {
   settings: EditSettings
@@ -103,14 +104,10 @@ export function EditSettingsPanel({ settings, onUpdate, apiKeys, onApiKeyChange,
       </Field>
 
       <Field label="Max attempts">
-        <input
-          type="number"
-          min={1}
-          max={20}
+        <MaxAttemptsControl
           value={settings.attemptsCap}
-          onChange={(e) => onUpdate({ attemptsCap: Math.min(20, Math.max(1, Number(e.target.value) || 1)) })}
+          onChange={(attemptsCap) => onUpdate({ attemptsCap })}
           disabled={disabled}
-          className="w-full rounded-md border border-zinc-700 bg-zinc-900 px-2.5 py-1.5 text-xs text-zinc-200 outline-none focus:border-blue-500 disabled:opacity-50"
         />
         <p className="mt-1 text-[10px] text-zinc-600">
           Moderation blocks, unchanged results, and mismatched framing all auto-retry up to this cap.
