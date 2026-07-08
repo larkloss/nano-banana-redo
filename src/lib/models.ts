@@ -5,6 +5,8 @@ export interface ModelInfo {
   supportsImageSize: boolean
   supportsThinking: boolean
   aspectRatios: string[]
+  // Short tag used in downloaded filenames, e.g. abigail-<filenameSlug>_<timestamp>_01.png
+  filenameSlug: string
 }
 
 const BASE_RATIOS = ['1:1', '2:3', '3:2', '3:4', '4:3', '4:5', '5:4', '9:16', '16:9', '21:9']
@@ -18,6 +20,7 @@ export const MODELS: ModelInfo[] = [
     supportsImageSize: true,
     supportsThinking: true,
     aspectRatios: EXTENDED_RATIOS,
+    filenameSlug: 'nano-banana-2',
   },
   {
     id: 'gemini-3-pro-image-preview',
@@ -26,6 +29,7 @@ export const MODELS: ModelInfo[] = [
     supportsImageSize: true,
     supportsThinking: false,
     aspectRatios: EXTENDED_RATIOS,
+    filenameSlug: 'pro',
   },
   {
     id: 'gemini-2.5-flash-image',
@@ -34,6 +38,7 @@ export const MODELS: ModelInfo[] = [
     supportsImageSize: false,
     supportsThinking: false,
     aspectRatios: BASE_RATIOS,
+    filenameSlug: 'nano-banana',
   },
 ]
 
