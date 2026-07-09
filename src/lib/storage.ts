@@ -1,4 +1,4 @@
-import type { Settings } from '../types'
+import type { PromptModule, PromptWorkspace, Settings } from '../types'
 import { MODELS, getModel } from './models'
 
 const SETTINGS_KEY = 'nbr.settings.v1'
@@ -44,6 +44,81 @@ export function loadSettings(): Settings {
     return parsed
   } catch {
     return DEFAULT_SETTINGS
+  }
+}
+
+const WORKSPACE_KEY = 'nbr.promptModules.v1'
+
+// Only module NAMES are seeded — content stays empty so nothing personal ever
+// lands in the repo; the user pastes their template once (or uses the
+// import-split dialog) and it persists in localStorage.
+const DEFAULT_MODULE_NAMES = [
+  'Style & Quality',
+  'Core Subject',
+  'Hair',
+  'Outfit Top',
+  'Outfit Skirt',
+  'Shoes',
+  'Bag',
+  'Pose & Environment',
+]
+
+export function defaultWorkspace(): PromptWorkspace {
+  return {
+    mode: 'modular',
+    modules: DEFAULT_MODULE_NAMES.map((name) => emptyModule(name)),
+  }
+}
+
+export function emptyModule(name: string, text = ''): PromptModule {
+  return {
+    id: crypto.randomUUID(),
+    name,
+    enabled: true,
+    text,
+    variants: [],
+    activeVariantId: null,
+    collapsed: false,
+  }
+}
+
+export function loadPromptWorkspace(): PromptWorkspace {
+  try {
+    const raw = localStorage.getItem(WORKSPACE_KEY)
+    if (!raw) return defaultWorkspace()
+    const parsed = JSON.parse(raw) as PromptWorkspace
+    if (parsed.mode !== 'simple' && parsed.mode !== 'modular') parsed.mode = 'modular'
+    if (!Array.isArray(parsed.modules)) return defaultWorkspace()
+    parsed.modules = parsed.modules
+      .filter((m) => m && typeof m === 'object')
+      .map((m) => ({
+        id: typeof m.id === 'string' ? m.id : crypto.randomUUID(),
+        name: typeof m.name === 'string' ? m.name : 'Module',
+        enabled: m.enabled !== false,
+        text: typeof m.text === 'string' ? m.text : '',
+        variants: Array.isArray(m.variants)
+          ? m.variants
+              .filter((v) => v && typeof v.text === 'string')
+              .map((v) => ({
+                id: typeof v.id === 'string' ? v.id : crypto.randomUUID(),
+                name: typeof v.name === 'string' ? v.name : 'Variant',
+                text: v.text,
+              }))
+          : [],
+        activeVariantId: typeof m.activeVariantId === 'string' ? m.activeVariantId : null,
+        collapsed: m.collapsed === true,
+      }))
+    return parsed
+  } catch {
+    return defaultWorkspace()
+  }
+}
+
+export function savePromptWorkspace(workspace: PromptWorkspace): void {
+  try {
+    localStorage.setItem(WORKSPACE_KEY, JSON.stringify(workspace))
+  } catch {
+    // storage full or unavailable — workspace just won't persist
   }
 }
 

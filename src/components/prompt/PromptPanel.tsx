@@ -1,19 +1,30 @@
 import { useState } from 'react'
 import type { ReferenceImage } from '../../types'
+import type { PromptWorkspaceApi } from '../../hooks/usePromptWorkspace'
 import { ReferenceImageStrip } from './ReferenceImageStrip'
+import { ModularPromptEditor } from './ModularPromptEditor'
 import { fileToReference } from '../../lib/imageUtils'
 import { saveTextAsMarkdown, promptFilename } from '../../lib/saveText'
 
 interface Props {
   prompt: string
   onPromptChange: (prompt: string) => void
+  workspaceApi: PromptWorkspaceApi
   references: ReferenceImage[]
   onReferencesChange: (refs: ReferenceImage[]) => void
   disabled: boolean
 }
 
-export function PromptPanel({ prompt, onPromptChange, references, onReferencesChange, disabled }: Props) {
+export function PromptPanel({
+  prompt,
+  onPromptChange,
+  workspaceApi,
+  references,
+  onReferencesChange,
+  disabled,
+}: Props) {
   const [dragOver, setDragOver] = useState(false)
+  const mode = workspaceApi.workspace.mode
 
   const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault()
@@ -53,27 +64,43 @@ export function PromptPanel({ prompt, onPromptChange, references, onReferencesCh
           Drop reference images
         </div>
       )}
-      <div className="mb-2 flex items-center justify-between">
-        <span className="text-xs font-medium text-zinc-400">Prompt</span>
-        <button
-          type="button"
-          onClick={() => void saveTextAsMarkdown(prompt, promptFilename())}
-          disabled={!prompt.trim()}
-          title="Save the prompt as a .md file — Chrome/Edge ask where to save it"
-          className="rounded-md border border-zinc-700 px-2.5 py-1 text-[10px] text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 disabled:opacity-40"
-        >
-          ↓ Save prompt (.md)
-        </button>
+
+      <div className="mb-3 flex items-center justify-between">
+        <div className="flex gap-1 rounded-lg border border-zinc-800 bg-zinc-950/60 p-0.5">
+          <TabButton active={mode === 'modular'} onClick={() => workspaceApi.setMode('modular')} disabled={disabled}>
+            Modular
+          </TabButton>
+          <TabButton active={mode === 'simple'} onClick={() => workspaceApi.setMode('simple')} disabled={disabled}>
+            Simple
+          </TabButton>
+        </div>
+        {mode === 'simple' && (
+          <button
+            type="button"
+            onClick={() => void saveTextAsMarkdown(prompt, promptFilename())}
+            disabled={!prompt.trim()}
+            title="Save the prompt as a .md file — Chrome/Edge ask where to save it"
+            className="rounded-md border border-zinc-700 px-2.5 py-1 text-[10px] text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 disabled:opacity-40"
+          >
+            ↓ Save prompt (.md)
+          </button>
+        )}
       </div>
-      <textarea
-        value={prompt}
-        onChange={(e) => onPromptChange(e.target.value)}
-        disabled={disabled}
-        placeholder="Describe the Abigail Chase artwork you want… (your fixed prompt goes here)"
-        rows={8}
-        spellCheck={false}
-        className="w-full resize-y rounded-md bg-transparent text-sm leading-relaxed text-zinc-200 placeholder-zinc-600 outline-none disabled:opacity-60"
-      />
+
+      {mode === 'simple' ? (
+        <textarea
+          value={prompt}
+          onChange={(e) => onPromptChange(e.target.value)}
+          disabled={disabled}
+          placeholder="Describe the Abigail Chase artwork you want… (your fixed prompt goes here)"
+          rows={8}
+          spellCheck={false}
+          className="w-full resize-y rounded-md bg-transparent text-sm leading-relaxed text-zinc-200 placeholder-zinc-600 outline-none disabled:opacity-60"
+        />
+      ) : (
+        <ModularPromptEditor api={workspaceApi} simplePrompt={prompt} disabled={disabled} />
+      )}
+
       <div className="mt-3 border-t border-zinc-800 pt-3">
         <div className="mb-2 text-xs font-medium text-zinc-400">
           Reference images <span className="font-normal text-zinc-600">(optional — drag &amp; drop or click +)</span>
@@ -81,5 +108,30 @@ export function PromptPanel({ prompt, onPromptChange, references, onReferencesCh
         <ReferenceImageStrip references={references} onChange={onReferencesChange} disabled={disabled} />
       </div>
     </div>
+  )
+}
+
+function TabButton({
+  active,
+  onClick,
+  disabled,
+  children,
+}: {
+  active: boolean
+  onClick: () => void
+  disabled: boolean
+  children: React.ReactNode
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      className={`rounded-md px-3 py-1 text-xs transition-colors disabled:opacity-50 ${
+        active ? 'bg-blue-500/15 font-medium text-blue-300' : 'text-zinc-500 hover:text-zinc-300'
+      }`}
+    >
+      {children}
+    </button>
   )
 }

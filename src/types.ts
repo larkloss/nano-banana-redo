@@ -15,6 +15,31 @@ export interface Settings {
   prompt: string
 }
 
+export interface PromptVariant {
+  id: string
+  name: string
+  text: string
+}
+
+export interface PromptModule {
+  id: string
+  // UI label only — never included in the assembled prompt
+  name: string
+  enabled: boolean
+  text: string
+  variants: PromptVariant[]
+  // Variant last loaded into `text`; editing afterwards marks it dirty in the UI
+  activeVariantId: string | null
+  collapsed: boolean
+}
+
+export type PromptMode = 'simple' | 'modular'
+
+export interface PromptWorkspace {
+  mode: PromptMode
+  modules: PromptModule[]
+}
+
 export interface ReferenceImage {
   id: string
   name: string
