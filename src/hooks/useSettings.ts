@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Settings } from '../types'
-import { loadSettings, saveSettings, loadApiKeys, saveApiKey } from '../lib/storage'
+import { loadSettings, saveSettings, loadApiKeys, saveApiKey, type ApiKeys, type ApiKeyIndex } from '../lib/storage'
 import { getModel } from '../lib/models'
 
 export function useSettings() {
   const [settings, setSettings] = useState<Settings>(loadSettings)
-  const [apiKeys, setApiKeysState] = useState<[string, string]>(loadApiKeys)
+  const [apiKeys, setApiKeysState] = useState<ApiKeys>(loadApiKeys)
   const saveTimer = useRef<number | undefined>(undefined)
 
   useEffect(() => {
@@ -25,17 +25,13 @@ export function useSettings() {
         }
         if (!model.supportsImageSize) next.imageSize = '1K'
       }
-      // Suggest a proportional attempts cap when target count changes
-      if (patch.targetCount !== undefined && patch.attemptsCap === undefined) {
-        next.attemptsCap = Math.min(50, Math.max(next.targetCount, patch.targetCount * 3))
-      }
       return next
     })
   }
 
-  const setApiKey = (index: 0 | 1, key: string) => {
+  const setApiKey = (index: ApiKeyIndex, key: string) => {
     setApiKeysState((prev) => {
-      const next: [string, string] = [...prev]
+      const next: ApiKeys = [...prev]
       next[index] = key
       return next
     })

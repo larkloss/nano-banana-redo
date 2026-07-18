@@ -63,11 +63,14 @@ async function edited(
   fctx.drawImage(baseBmp, 0, 0)
   fctx.drawImage(editLayer, 0, 0)
 
-  // Deliberate whole-frame misalignment, simulating the model quirk
+  // Deliberate whole-frame misalignment + global tone shift, simulating the
+  // two documented model quirks (the seamless blend must undo the tone shift)
   const out = new OffscreenCanvas(w, h)
   const octx = out.getContext('2d')!
+  octx.filter = 'brightness(1.09) saturate(1.05)'
   octx.drawImage(baseBmp, 0, 0) // pad so shifted edges aren't transparent
   octx.drawImage(frame, shift.dx, shift.dy)
+  octx.filter = 'none'
 
   baseBmp.close()
   maskBmp.close()

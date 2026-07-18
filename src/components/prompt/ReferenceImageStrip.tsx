@@ -2,20 +2,20 @@ import { useRef } from 'react'
 import type { ReferenceImage } from '../../types'
 import { fileToReference } from '../../lib/imageUtils'
 
-const MAX_REFERENCES = 6
-
 interface Props {
   references: ReferenceImage[]
   onChange: (refs: ReferenceImage[]) => void
   disabled: boolean
+  max?: number
+  addLabel?: string
 }
 
-export function ReferenceImageStrip({ references, onChange, disabled }: Props) {
+export function ReferenceImageStrip({ references, onChange, disabled, max = 6, addLabel = 'Reference' }: Props) {
   const inputRef = useRef<HTMLInputElement>(null)
 
   const addFiles = async (files: FileList | File[]) => {
     const images = Array.from(files).filter((f) => f.type.startsWith('image/'))
-    const room = MAX_REFERENCES - references.length
+    const room = max - references.length
     const added = await Promise.all(
       images.slice(0, room).map(async (file) => {
         const { base64, mimeType } = await fileToReference(file)
@@ -59,7 +59,7 @@ export function ReferenceImageStrip({ references, onChange, disabled }: Props) {
           )}
         </div>
       ))}
-      {references.length < MAX_REFERENCES && (
+      {references.length < max && (
         <button
           type="button"
           onClick={() => inputRef.current?.click()}
@@ -67,7 +67,7 @@ export function ReferenceImageStrip({ references, onChange, disabled }: Props) {
           className="flex h-20 w-20 flex-col items-center justify-center gap-1 rounded-md border border-dashed border-zinc-700 text-zinc-500 hover:border-zinc-500 hover:text-zinc-400 disabled:opacity-50"
         >
           <span className="text-lg leading-none">+</span>
-          <span className="text-[9px]">Reference</span>
+          <span className="text-[9px]">{addLabel}</span>
         </button>
       )}
       <input

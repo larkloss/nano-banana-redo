@@ -1,4 +1,4 @@
-import { GoogleGenAI } from '@google/genai'
+import { GoogleGenAI, ThinkingLevel } from '@google/genai'
 import type { ParsedImagePart, ParsedResponse, Settings } from '../types'
 import { getModel } from './models'
 
@@ -37,6 +37,11 @@ export const callGenerate: GenerateCaller = async ({ apiKey, settings, reference
   if (settings.aspectRatio !== 'auto') imageConfig.aspectRatio = settings.aspectRatio
   if (model.supportsImageSize) imageConfig.imageSize = settings.imageSize
 
+  // Only Nano Banana 2 (gemini-3.1-flash-image) accepts a thinking level for
+  // image generation; hard-wired to HIGH for best prompt adherence. Sending it
+  // to models that don't support it (Pro, 2.5) would error, so it's gated.
+  const thinkingConfig = model.supportsThinking ? { thinkingLevel: ThinkingLevel.HIGH } : null
+
   const doCall = (sys: string | null, callParts: Part[]) =>
     ai.models.generateContent({
       model: settings.modelId,
@@ -45,6 +50,7 @@ export const callGenerate: GenerateCaller = async ({ apiKey, settings, reference
         responseModalities: ['TEXT', 'IMAGE'],
         ...(sys ? { systemInstruction: sys } : {}),
         ...(Object.keys(imageConfig).length > 0 ? { imageConfig } : {}),
+        ...(thinkingConfig ? { thinkingConfig } : {}),
         abortSignal: signal,
       },
     })

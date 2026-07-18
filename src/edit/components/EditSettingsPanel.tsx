@@ -4,12 +4,13 @@ import { MODELS } from '../../lib/models'
 import { EDIT_MODELS } from '../lib/storage'
 import { Field, Chip } from '../../components/settings/RunSettingsPanel'
 import { ApiKeySection } from '../../components/settings/ApiKeySection'
+import { MaxAttemptsControl } from '../../components/settings/MaxAttemptsControl'
 
 interface Props {
   settings: EditSettings
   onUpdate: (patch: Partial<EditSettings>) => void
-  apiKeys: [string, string]
-  onApiKeyChange: (index: 0 | 1, key: string) => void
+  apiKeys: [string, string, string]
+  onApiKeyChange: (index: 0 | 1 | 2, key: string) => void
   disabled: boolean
 }
 
@@ -85,15 +86,28 @@ export function EditSettingsPanel({ settings, onUpdate, apiKeys, onApiKeyChange,
         </p>
       </Field>
 
+      <Field label="Seamless blend">
+        <label className="flex cursor-pointer items-center gap-2 text-xs text-zinc-300">
+          <input
+            type="checkbox"
+            checked={settings.seamless}
+            onChange={(e) => onUpdate({ seamless: e.target.checked })}
+            disabled={disabled}
+            className="accent-blue-500"
+          />
+          Tone match + seam smoothing + grain match
+        </label>
+        <p className="mt-1 text-[10px] text-zinc-600">
+          Corrects the model's global tone shift and diffuses the residual boundary difference into
+          the region (Poisson-style), so the patch doesn't look pasted on.
+        </p>
+      </Field>
+
       <Field label="Max attempts">
-        <input
-          type="number"
-          min={1}
-          max={20}
+        <MaxAttemptsControl
           value={settings.attemptsCap}
-          onChange={(e) => onUpdate({ attemptsCap: Math.min(20, Math.max(1, Number(e.target.value) || 1)) })}
+          onChange={(attemptsCap) => onUpdate({ attemptsCap })}
           disabled={disabled}
-          className="w-full rounded-md border border-zinc-700 bg-zinc-900 px-2.5 py-1.5 text-xs text-zinc-200 outline-none focus:border-blue-500 disabled:opacity-50"
         />
         <p className="mt-1 text-[10px] text-zinc-600">
           Moderation blocks, unchanged results, and mismatched framing all auto-retry up to this cap.

@@ -8,10 +8,17 @@ import { viteSingleFile } from 'vite-plugin-singlefile'
 // double-click — no npm needed. vite-plugin-singlefile can't handle
 // multiple entries, so single-file artifacts are built one at a time.
 export default defineConfig(({ mode }) => {
-  const singleEntry = mode === 'single' ? 'index.html' : mode === 'single-edit' ? 'edit.html' : null
+  const singleEntry =
+    mode === 'single'
+      ? 'index.html'
+      : mode === 'single-edit'
+        ? 'edit.html'
+        : mode === 'single-video'
+          ? 'video.html'
+          : null
   const input: Record<string, string> = singleEntry
     ? { app: singleEntry }
-    : { main: 'index.html', edit: 'edit.html' }
+    : { main: 'index.html', edit: 'edit.html', video: 'video.html' }
   return {
     plugins: [react(), tailwindcss(), ...(singleEntry ? [viteSingleFile()] : [])],
     build: {

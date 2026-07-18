@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import type { EditSettings } from '../types'
 import { loadEditSettings, saveEditSettings } from '../lib/storage'
-import { loadApiKeys, saveApiKey } from '../../lib/storage'
+import { loadApiKeys, saveApiKey, type ApiKeys, type ApiKeyIndex } from '../../lib/storage'
 
 export function useEditSettings() {
   const [settings, setSettings] = useState<EditSettings>(loadEditSettings)
-  const [apiKeys, setApiKeysState] = useState<[string, string]>(loadApiKeys)
+  const [apiKeys, setApiKeysState] = useState<ApiKeys>(loadApiKeys)
   const saveTimer = useRef<number | undefined>(undefined)
 
   useEffect(() => {
@@ -18,9 +18,9 @@ export function useEditSettings() {
     setSettings((prev) => ({ ...prev, ...patch }))
   }
 
-  const setApiKey = (index: 0 | 1, key: string) => {
+  const setApiKey = (index: ApiKeyIndex, key: string) => {
     setApiKeysState((prev) => {
-      const next: [string, string] = [...prev]
+      const next: ApiKeys = [...prev]
       next[index] = key
       return next
     })

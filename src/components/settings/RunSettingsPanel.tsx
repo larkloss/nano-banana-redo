@@ -1,12 +1,13 @@
 import type { Settings } from '../../types'
 import { MODELS, getModel } from '../../lib/models'
 import { ApiKeySection } from './ApiKeySection'
+import { MaxAttemptsControl } from './MaxAttemptsControl'
 
 interface Props {
   settings: Settings
   onUpdate: (patch: Partial<Settings>) => void
-  apiKeys: [string, string]
-  onApiKeyChange: (index: 0 | 1, key: string) => void
+  apiKeys: [string, string, string]
+  onApiKeyChange: (index: 0 | 1 | 2, key: string) => void
   disabled: boolean
 }
 
@@ -126,16 +127,10 @@ export function RunSettingsPanel({ settings, onUpdate, apiKeys, onApiKeyChange, 
       </Field>
 
       <Field label="Max attempts">
-        <input
-          type="number"
-          min={1}
-          max={50}
+        <MaxAttemptsControl
           value={settings.attemptsCap}
-          onChange={(e) =>
-            onUpdate({ attemptsCap: Math.min(50, Math.max(1, Number(e.target.value) || 1)) })
-          }
+          onChange={(attemptsCap) => onUpdate({ attemptsCap })}
           disabled={disabled}
-          className="w-full rounded-md border border-zinc-700 bg-zinc-900 px-2.5 py-1.5 text-xs text-zinc-200 outline-none focus:border-blue-500 disabled:opacity-50"
         />
         <p className="mt-1 text-[10px] text-zinc-600">
           Safety cap: the run stops here even if fewer images were collected, so a permanently

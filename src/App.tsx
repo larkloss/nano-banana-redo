@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { ReferenceImage } from './types'
 import { useSettings } from './hooks/useSettings'
+import { usePromptWorkspace } from './hooks/usePromptWorkspace'
 import { useGenerationEngine } from './hooks/useGenerationEngine'
 import { RunSettingsPanel } from './components/settings/RunSettingsPanel'
 import { PromptPanel } from './components/prompt/PromptPanel'
@@ -10,8 +11,12 @@ import { isMockMode } from './lib/mockGemini'
 
 function App() {
   const { settings, update, apiKeys, setApiKey } = useSettings()
+  const workspaceApi = usePromptWorkspace()
   const { runState, images, start, stop, clearImages, isRunning } = useGenerationEngine()
   const [references, setReferences] = useState<ReferenceImage[]>([])
+
+  const effectivePrompt =
+    workspaceApi.workspace.mode === 'modular' ? workspaceApi.assembled : settings.prompt
 
   const mock = isMockMode()
   const activeKeys = mock
@@ -21,8 +26,10 @@ function App() {
     : apiKeys.filter(Boolean)
   const runDisabledHint = activeKeys.length === 0
     ? 'Set your Google AI Studio API key in the settings panel first.'
-    : !settings.prompt.trim()
-      ? 'Enter a prompt first.'
+    : !effectivePrompt.trim()
+      ? workspaceApi.workspace.mode === 'modular'
+        ? 'The assembled prompt is empty — fill in or import prompt modules first.'
+        : 'Enter a prompt first.'
       : null
   const canRun = runDisabledHint === null
 
@@ -49,6 +56,7 @@ function App() {
         <PromptPanel
           prompt={settings.prompt}
           onPromptChange={(prompt) => update({ prompt })}
+          workspaceApi={workspaceApi}
           references={references}
           onReferencesChange={setReferences}
           disabled={isRunning}
@@ -58,7 +66,7 @@ function App() {
           isRunning={isRunning}
           canRun={canRun}
           runDisabledHint={runDisabledHint}
-          onRun={() => void start(activeKeys, settings, references)}
+          onRun={() => void start(activeKeys, { ...settings, prompt: effectivePrompt }, references)}
           onStop={stop}
         />
         <Gallery images={images} onClear={clearImages} isRunning={isRunning} />

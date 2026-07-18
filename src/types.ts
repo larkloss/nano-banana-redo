@@ -15,6 +15,31 @@ export interface Settings {
   prompt: string
 }
 
+export interface PromptVariant {
+  id: string
+  name: string
+  text: string
+}
+
+export interface PromptModule {
+  id: string
+  // UI label only — never included in the assembled prompt
+  name: string
+  enabled: boolean
+  text: string
+  variants: PromptVariant[]
+  // Variant last loaded into `text`; editing afterwards marks it dirty in the UI
+  activeVariantId: string | null
+  collapsed: boolean
+}
+
+export type PromptMode = 'simple' | 'modular'
+
+export interface PromptWorkspace {
+  mode: PromptMode
+  modules: PromptModule[]
+}
+
 export interface ReferenceImage {
   id: string
   name: string
@@ -67,6 +92,86 @@ export interface ParsedImagePart {
   base64: string
   mimeType: string
 }
+
+// ---------------------------------------------------------------------------
+// Video app (Veo)
+// ---------------------------------------------------------------------------
+
+// 'references' → up to 3 asset images for character consistency;
+// 'frames' → first-frame image-to-video with optional last frame.
+// The Veo API forbids mixing the two, hence a mode switch.
+export type VideoInputMode = 'references' | 'frames'
+
+export interface VideoSettings {
+  modelId: string
+  aspectRatio: '16:9' | '9:16'
+  resolution: '720p' | '1080p'
+  durationSeconds: 4 | 6 | 8
+  generateAudio: boolean
+  negativePrompt: string
+  seed: number | null
+  personGeneration: 'allow_adult' | 'dont_allow'
+  // Server default is ON; we only send the flag when the user opts out
+  enhancePrompt: boolean
+  inputMode: VideoInputMode
+  targetCount: number
+  attemptsCap: number
+  prompt: string
+}
+
+export interface GeneratedVideo {
+  id: string
+  blob: Blob
+  objectUrl: string
+  mimeType: string
+  modelId: string
+  durationSeconds: number
+  resolution: string
+  aspectRatio: string
+  attempt: number
+  createdAt: number
+}
+
+// A video attempt is a long-running operation, so lanes surface which phase
+// they are in (submit → poll for minutes → download the finished file).
+export type VideoLaneStatus =
+  | 'idle'
+  | 'submitting'
+  | 'polling'
+  | 'downloading'
+  | 'backoff'
+  | 'done'
+  | 'dead'
+
+export interface VideoLaneState {
+  status: VideoLaneStatus
+  lastReason: string | null
+  backoffUntil: number | null
+  // When the current phase started — lets the UI show elapsed polling time
+  phaseStartedAt: number | null
+}
+
+export interface VideoRunState {
+  status: RunStatus
+  collected: number
+  target: number
+  attempts: number
+  cap: number
+  lanes: VideoLaneState[]
+  lastFailure: string | null
+  errorMessage: string | null
+}
+
+export type VideoResult =
+  | { kind: 'video'; blob: Blob; mimeType: string }
+  // Safety-filtered or empty response — counts as a completed attempt, retried
+  | { kind: 'filtered'; reason: string }
+
+export type VideoEngineEvent =
+  | { type: 'video'; blob: Blob; mimeType: string; attempt: number; lane: number }
+  | { type: 'progress'; collected: number; attempts: number; cap: number }
+  | { type: 'failure'; reason: string; attempts: number; cap: number; lane: number }
+  | { type: 'lane'; lane: number; status: VideoLaneStatus; reason?: string; backoffUntil?: number }
 
 export interface ParsedResponse {
   images: ParsedImagePart[]

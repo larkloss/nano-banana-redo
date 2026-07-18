@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "build:single": "tsc -b && vite build --mode single && cp dist/index.html nano-banana.html",
     "build:single:edit": "tsc -b && vite build --mode single-edit && cp dist/edit.html nano-banana-edit.html",
-    "build:singles": "npm run build:single && npm run build:single:edit"
+    "build:single:video": "tsc -b && vite build --mode single-video && cp dist/video.html nano-banana-video.html",
+    "build:singles": "npm run build:single && npm run build:single:edit && npm run build:single:video"
   },
   "dependencies": {
     "@google/genai": "^2.8.0",

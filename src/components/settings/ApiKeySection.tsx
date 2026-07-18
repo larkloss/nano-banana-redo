@@ -1,8 +1,8 @@
 import { useState } from 'react'
 
 interface Props {
-  apiKeys: [string, string]
-  onChange: (index: 0 | 1, key: string) => void
+  apiKeys: [string, string, string]
+  onChange: (index: 0 | 1 | 2, key: string) => void
 }
 
 export function ApiKeySection({ apiKeys, onChange }: Props) {
@@ -19,11 +19,17 @@ export function ApiKeySection({ apiKeys, onChange }: Props) {
         value={apiKeys[1]}
         onSave={(key) => onChange(1, key)}
       />
+      <KeyInput
+        label="API key 3 · optional"
+        hint="Adds a third parallel generation lane"
+        value={apiKeys[2]}
+        onSave={(key) => onChange(2, key)}
+      />
       <p className="text-[10px] leading-snug text-zinc-600">
         Keys are stored in this browser's localStorage and sent directly to the Gemini API. Fine
-        for personal use — never deploy this app publicly with your keys. For real double
-        throughput, the two keys must belong to different Google Cloud projects (rate limits are
-        per project, not per key).
+        for personal use — never deploy this app publicly with your keys. For real parallel
+        throughput, the keys must belong to different Google Cloud projects (rate limits are per
+        project, not per key).
       </p>
     </div>
   )

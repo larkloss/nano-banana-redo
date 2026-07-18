@@ -1,5 +1,6 @@
 import JSZip from 'jszip'
 import type { GeneratedImage, OutputFormat, ParsedImagePart } from '../types'
+import { getModel } from './models'
 
 export function base64ToBlob(base64: string, mimeType: string): Blob {
   const binary = atob(base64)
@@ -50,7 +51,8 @@ async function toJpeg(bitmap: ImageBitmap): Promise<Blob> {
 export function makeFilename(image: GeneratedImage, index: number): string {
   const ext = image.format === 'jpg' ? 'jpg' : 'png'
   const stamp = new Date(image.createdAt).toISOString().slice(0, 19).replace(/[:T]/g, '-')
-  return `abigail-chase_${stamp}_${String(index + 1).padStart(2, '0')}.${ext}`
+  const slug = getModel(image.modelId).filenameSlug
+  return `abigail-${slug}_${stamp}_${String(index + 1).padStart(2, '0')}.${ext}`
 }
 
 export function downloadBlob(blob: Blob, filename: string): void {
