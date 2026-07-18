@@ -3,15 +3,19 @@ import type { PromptMode, PromptModule, PromptWorkspace } from '../types'
 import { loadPromptWorkspace, savePromptWorkspace, emptyModule } from '../lib/storage'
 import { assembleModules, type SplitResult } from '../lib/promptAssembly'
 
-export function usePromptWorkspace() {
-  const [workspace, setWorkspace] = useState<PromptWorkspace>(loadPromptWorkspace)
+// Generator and video app each pass their own storageKey/defaultNames so
+// their module libraries live side by side without clobbering each other.
+export function usePromptWorkspace(storageKey?: string, defaultNames?: string[]) {
+  const [workspace, setWorkspace] = useState<PromptWorkspace>(() =>
+    loadPromptWorkspace(storageKey, defaultNames),
+  )
   const saveTimer = useRef<number | undefined>(undefined)
 
   useEffect(() => {
     clearTimeout(saveTimer.current)
-    saveTimer.current = window.setTimeout(() => savePromptWorkspace(workspace), 500)
+    saveTimer.current = window.setTimeout(() => savePromptWorkspace(workspace, storageKey), 500)
     return () => clearTimeout(saveTimer.current)
-  }, [workspace])
+  }, [workspace, storageKey])
 
   const assembled = useMemo(() => assembleModules(workspace.modules), [workspace.modules])
 

@@ -1,5 +1,6 @@
-import type { PromptModule, PromptWorkspace, Settings } from '../types'
+import type { PromptModule, PromptWorkspace, Settings, VideoSettings } from '../types'
 import { MODELS, getModel } from './models'
+import { VEO_MODELS } from './veoModels'
 
 const SETTINGS_KEY = 'nbr.settings.v1'
 const API_KEY_KEYS = ['nbr.apiKey', 'nbr.apiKey2', 'nbr.apiKey3'] as const
@@ -48,6 +49,7 @@ export function loadSettings(): Settings {
 }
 
 const WORKSPACE_KEY = 'nbr.promptModules.v1'
+export const VIDEO_WORKSPACE_KEY = 'nbr.videoPromptModules.v1'
 
 // Only module NAMES are seeded — content stays empty so nothing personal ever
 // lands in the repo; the user pastes their template once (or uses the
@@ -63,10 +65,19 @@ const DEFAULT_MODULE_NAMES = [
   'Pose & Environment',
 ]
 
-export function defaultWorkspace(): PromptWorkspace {
+export const VIDEO_MODULE_NAMES = [
+  'Style & Quality',
+  'Core Subject',
+  'Wardrobe',
+  'Action & Camera',
+  'Environment',
+  'Audio',
+]
+
+export function defaultWorkspace(defaultNames: string[] = DEFAULT_MODULE_NAMES): PromptWorkspace {
   return {
     mode: 'modular',
-    modules: DEFAULT_MODULE_NAMES.map((name) => emptyModule(name)),
+    modules: defaultNames.map((name) => emptyModule(name)),
   }
 }
 
@@ -82,13 +93,16 @@ export function emptyModule(name: string, text = ''): PromptModule {
   }
 }
 
-export function loadPromptWorkspace(): PromptWorkspace {
+export function loadPromptWorkspace(
+  storageKey: string = WORKSPACE_KEY,
+  defaultNames: string[] = DEFAULT_MODULE_NAMES,
+): PromptWorkspace {
   try {
-    const raw = localStorage.getItem(WORKSPACE_KEY)
-    if (!raw) return defaultWorkspace()
+    const raw = localStorage.getItem(storageKey)
+    if (!raw) return defaultWorkspace(defaultNames)
     const parsed = JSON.parse(raw) as PromptWorkspace
     if (parsed.mode !== 'simple' && parsed.mode !== 'modular') parsed.mode = 'modular'
-    if (!Array.isArray(parsed.modules)) return defaultWorkspace()
+    if (!Array.isArray(parsed.modules)) return defaultWorkspace(defaultNames)
     parsed.modules = parsed.modules
       .filter((m) => m && typeof m === 'object')
       .map((m) => ({
@@ -110,15 +124,66 @@ export function loadPromptWorkspace(): PromptWorkspace {
       }))
     return parsed
   } catch {
-    return defaultWorkspace()
+    return defaultWorkspace(defaultNames)
   }
 }
 
-export function savePromptWorkspace(workspace: PromptWorkspace): void {
+export function savePromptWorkspace(workspace: PromptWorkspace, storageKey: string = WORKSPACE_KEY): void {
   try {
-    localStorage.setItem(WORKSPACE_KEY, JSON.stringify(workspace))
+    localStorage.setItem(storageKey, JSON.stringify(workspace))
   } catch {
     // storage full or unavailable — workspace just won't persist
+  }
+}
+
+const VIDEO_SETTINGS_KEY = 'nbr.videoSettings.v1'
+
+export const DEFAULT_VIDEO_SETTINGS: VideoSettings = {
+  modelId: VEO_MODELS[2].id, // Lite by default — cheapest, safe for experimenting
+  aspectRatio: '16:9',
+  resolution: '720p',
+  durationSeconds: 8,
+  generateAudio: true,
+  negativePrompt: '',
+  seed: null,
+  personGeneration: 'allow_adult',
+  enhancePrompt: true,
+  inputMode: 'references',
+  // Videos cost real money per attempt — default to a single one per run
+  targetCount: 1,
+  attemptsCap: 5,
+  prompt: '',
+}
+
+export function loadVideoSettings(): VideoSettings {
+  try {
+    const raw = localStorage.getItem(VIDEO_SETTINGS_KEY)
+    if (!raw) return DEFAULT_VIDEO_SETTINGS
+    const parsed = { ...DEFAULT_VIDEO_SETTINGS, ...JSON.parse(raw) } as VideoSettings
+    if (!VEO_MODELS.some((m) => m.id === parsed.modelId)) parsed.modelId = DEFAULT_VIDEO_SETTINGS.modelId
+    if (parsed.aspectRatio !== '9:16') parsed.aspectRatio = '16:9'
+    if (parsed.resolution !== '1080p') parsed.resolution = '720p'
+    if (![4, 6, 8].includes(parsed.durationSeconds)) parsed.durationSeconds = 8
+    parsed.generateAudio = parsed.generateAudio !== false
+    if (typeof parsed.negativePrompt !== 'string') parsed.negativePrompt = ''
+    if (typeof parsed.seed !== 'number' || !Number.isFinite(parsed.seed)) parsed.seed = null
+    if (parsed.personGeneration !== 'dont_allow') parsed.personGeneration = 'allow_adult'
+    parsed.enhancePrompt = parsed.enhancePrompt !== false
+    if (parsed.inputMode !== 'frames') parsed.inputMode = 'references'
+    parsed.targetCount = clampInt(parsed.targetCount, 1, 8, 1)
+    parsed.attemptsCap = clampInt(parsed.attemptsCap, 1, 50, 5)
+    if (typeof parsed.prompt !== 'string') parsed.prompt = ''
+    return parsed
+  } catch {
+    return DEFAULT_VIDEO_SETTINGS
+  }
+}
+
+export function saveVideoSettings(settings: VideoSettings): void {
+  try {
+    localStorage.setItem(VIDEO_SETTINGS_KEY, JSON.stringify(settings))
+  } catch {
+    // storage full or unavailable — settings just won't persist
   }
 }
 
