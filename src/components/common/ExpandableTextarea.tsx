@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 interface Props {
   value: string
@@ -16,6 +16,9 @@ interface Props {
 // user typed inline.
 export function ExpandableTextarea({ value, onChange, label, disabled, placeholder, rows, className }: Props) {
   const [expanded, setExpanded] = useState(false)
+  // Stable identity — a new function every render would re-trigger the modal's
+  // mount effects on each keystroke and yank the cursor to the end of the text
+  const closeExpanded = useCallback(() => setExpanded(false), [])
 
   return (
     <div className="relative">
@@ -44,7 +47,7 @@ export function ExpandableTextarea({ value, onChange, label, disabled, placehold
           onChange={onChange}
           label={label}
           placeholder={placeholder}
-          onClose={() => setExpanded(false)}
+          onClose={closeExpanded}
         />
       )}
     </div>
@@ -66,12 +69,17 @@ function ExpandedEditor({
 }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
+  // Mount-only: place the cursor at the end when the modal opens. Must not
+  // re-run on later renders or it would snap the cursor back on every edit.
   useEffect(() => {
     const el = textareaRef.current
     if (el) {
       el.focus()
       el.setSelectionRange(el.value.length, el.value.length)
     }
+  }, [])
+
+  useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose()
     }
