@@ -1,5 +1,6 @@
 import type { PromptWorkspaceApi } from '../../hooks/usePromptWorkspace'
 import { ModularPromptEditor } from '../../components/prompt/ModularPromptEditor'
+import { ExpandableTextarea } from '../../components/common/ExpandableTextarea'
 import { saveTextAsMarkdown, promptFilename } from '../../lib/saveText'
 
 interface Props {
@@ -39,13 +40,13 @@ export function VideoPromptPanel({ prompt, onPromptChange, workspaceApi, disable
       </div>
 
       {mode === 'simple' ? (
-        <textarea
+        <ExpandableTextarea
           value={prompt}
-          onChange={(e) => onPromptChange(e.target.value)}
+          onChange={onPromptChange}
+          label="Prompt"
           disabled={disabled}
           placeholder="Describe the video — subject, action, camera movement, environment, audio cues…"
           rows={8}
-          spellCheck={false}
           className="w-full resize-y rounded-md bg-transparent text-sm leading-relaxed text-zinc-200 placeholder-zinc-600 outline-none disabled:opacity-60"
         />
       ) : (

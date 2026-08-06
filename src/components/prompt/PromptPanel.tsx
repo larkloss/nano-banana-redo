@@ -3,6 +3,7 @@ import type { ReferenceImage } from '../../types'
 import type { PromptWorkspaceApi } from '../../hooks/usePromptWorkspace'
 import { ReferenceImageStrip } from './ReferenceImageStrip'
 import { ModularPromptEditor } from './ModularPromptEditor'
+import { ExpandableTextarea } from '../common/ExpandableTextarea'
 import { fileToReference } from '../../lib/imageUtils'
 import { saveTextAsMarkdown, promptFilename } from '../../lib/saveText'
 
@@ -88,13 +89,13 @@ export function PromptPanel({
       </div>
 
       {mode === 'simple' ? (
-        <textarea
+        <ExpandableTextarea
           value={prompt}
-          onChange={(e) => onPromptChange(e.target.value)}
+          onChange={onPromptChange}
+          label="Prompt"
           disabled={disabled}
           placeholder="Describe the Abigail Chase artwork you want… (your fixed prompt goes here)"
           rows={8}
-          spellCheck={false}
           className="w-full resize-y rounded-md bg-transparent text-sm leading-relaxed text-zinc-200 placeholder-zinc-600 outline-none disabled:opacity-60"
         />
       ) : (

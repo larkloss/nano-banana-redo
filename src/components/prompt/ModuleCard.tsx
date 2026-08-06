@@ -1,5 +1,6 @@
 import type { PromptModule } from '../../types'
 import type { PromptWorkspaceApi } from '../../hooks/usePromptWorkspace'
+import { ExpandableTextarea } from '../common/ExpandableTextarea'
 
 interface Props {
   module: PromptModule
@@ -113,12 +114,12 @@ export function ModuleCard({ module, isFirst, isLast, api, disabled }: Props) {
       </div>
 
       {!module.collapsed && (
-        <textarea
+        <ExpandableTextarea
           value={module.text}
-          onChange={(e) => api.setModuleText(module.id, e.target.value)}
+          onChange={(text) => api.setModuleText(module.id, text)}
+          label={module.name}
           disabled={disabled}
           rows={3}
-          spellCheck={false}
           placeholder={`${module.name} — include any section marker (e.g. "[${module.name.toUpperCase()}]:") in the text itself`}
           className="w-full resize-y border-t border-zinc-800 bg-transparent p-2.5 text-xs leading-relaxed text-zinc-200 placeholder-zinc-600 outline-none disabled:opacity-60"
         />

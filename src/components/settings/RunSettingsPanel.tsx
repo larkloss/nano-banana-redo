@@ -2,6 +2,7 @@ import type { Settings } from '../../types'
 import { MODELS, getModel } from '../../lib/models'
 import { ApiKeySection } from './ApiKeySection'
 import { MaxAttemptsControl } from './MaxAttemptsControl'
+import { ExpandableTextarea } from '../common/ExpandableTextarea'
 
 interface Props {
   settings: Settings
@@ -41,13 +42,13 @@ export function RunSettingsPanel({ settings, onUpdate, apiKeys, onApiKeyChange, 
       </Field>
 
       <Field label="System instructions">
-        <textarea
+        <ExpandableTextarea
           value={settings.systemInstruction}
-          onChange={(e) => onUpdate({ systemInstruction: e.target.value })}
+          onChange={(systemInstruction) => onUpdate({ systemInstruction })}
+          label="System instructions"
           disabled={disabled}
           placeholder="Optional tone and style instructions for the model…"
           rows={4}
-          spellCheck={false}
           className="w-full resize-y rounded-md border border-zinc-700 bg-zinc-900 px-2.5 py-2 text-xs leading-relaxed text-zinc-200 placeholder-zinc-600 outline-none focus:border-blue-500 disabled:opacity-50"
         />
         <p className="mt-1 text-[10px] text-zinc-600">
