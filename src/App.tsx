@@ -1,8 +1,8 @@
-import { useEffect, useState } from 'react'
-import type { ReferenceImage } from './types'
+import { useEffect } from 'react'
 import { useSettings } from './hooks/useSettings'
 import { usePromptWorkspace } from './hooks/usePromptWorkspace'
 import { useGenerationEngine } from './hooks/useGenerationEngine'
+import { usePersistedReferences } from './hooks/usePersistedReferences'
 import { RunSettingsPanel } from './components/settings/RunSettingsPanel'
 import { PromptPanel } from './components/prompt/PromptPanel'
 import { RunBar } from './components/run/RunBar'
@@ -13,7 +13,7 @@ function App() {
   const { settings, update, apiKeys, setApiKey } = useSettings()
   const workspaceApi = usePromptWorkspace()
   const { runState, images, start, stop, clearImages, isRunning } = useGenerationEngine()
-  const [references, setReferences] = useState<ReferenceImage[]>([])
+  const [references, setReferences] = usePersistedReferences('generator')
 
   const effectivePrompt =
     workspaceApi.workspace.mode === 'modular' ? workspaceApi.assembled : settings.prompt
