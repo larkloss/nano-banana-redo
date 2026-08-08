@@ -1,9 +1,11 @@
 import { useCallback, useRef, useState } from 'react'
 import type { EngineEvent, GeneratedImage, LaneState, ReferenceImage, RunState, Settings } from '../types'
 import { callGenerate } from '../lib/gemini'
+import { callGenerateXai } from '../lib/xai'
 import { mockCallGenerate, isMockMode } from '../lib/mockGemini'
 import { runGeneration } from '../lib/retryEngine'
 import { processImagePart } from '../lib/imageUtils'
+import { getProvider } from '../lib/models'
 
 const IDLE_STATE: RunState = {
   status: 'idle',
@@ -70,7 +72,11 @@ export function useGenerationEngine() {
       }
     }
 
-    const caller = isMockMode() ? mockCallGenerate : callGenerate
+    const caller = isMockMode()
+      ? mockCallGenerate
+      : getProvider(settings.modelId) === 'xai'
+        ? callGenerateXai
+        : callGenerate
     try {
       const summary = await runGeneration(caller, { keys, settings, references }, controller.signal, onEvent)
       setRunState((prev) => ({

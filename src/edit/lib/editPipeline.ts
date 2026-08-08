@@ -1,6 +1,7 @@
 import type { ParsedImagePart, Settings } from '../../types'
 import type { GenerateCaller } from '../../lib/gemini'
 import { base64ToBlob } from '../../lib/imageUtils'
+import { DEFAULT_SETTINGS } from '../../lib/storage'
 import type { BaseImage, EditSettings, Shape } from '../types'
 import { rasterizeAlphaMask, maskToBWPngBase64, maskBitsAt, blobToBase64 } from './mask'
 import { buildAnalysisContext, analyzeResult, type AlignResult, type AnalysisContext } from './align'
@@ -62,6 +63,9 @@ export async function prepareEditJob(
   const maskB64 = await maskToBWPngBase64(modelMask)
 
   const engineSettings: Settings = {
+    // Spread the defaults so provider-specific fields the editor doesn't use
+    // (xAI resolution/model override) stay valid without being restated here
+    ...DEFAULT_SETTINGS,
     modelId: settings.modelId,
     systemInstruction: '',
     aspectRatio: 'auto',

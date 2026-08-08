@@ -8,9 +8,10 @@ import { PromptPanel } from './components/prompt/PromptPanel'
 import { RunBar } from './components/run/RunBar'
 import { Gallery } from './components/gallery/Gallery'
 import { isMockMode } from './lib/mockGemini'
+import { getModel } from './lib/models'
 
 function App() {
-  const { settings, update, apiKeys, setApiKey } = useSettings()
+  const { settings, update, provider, apiKeys, setApiKey } = useSettings()
   const workspaceApi = usePromptWorkspace()
   const { runState, images, start, stop, clearImages, isRunning } = useGenerationEngine()
   const [references, setReferences] = usePersistedReferences('generator')
@@ -25,7 +26,9 @@ function App() {
       : ['mock']
     : apiKeys.filter(Boolean)
   const runDisabledHint = activeKeys.length === 0
-    ? 'Set your Google AI Studio API key in the settings panel first.'
+    ? provider === 'xai'
+      ? 'Set your xAI API key in the settings panel first.'
+      : 'Set your Google AI Studio API key in the settings panel first.'
     : !effectivePrompt.trim()
       ? workspaceApi.workspace.mode === 'modular'
         ? 'The assembled prompt is empty — fill in or import prompt modules first.'
@@ -59,6 +62,7 @@ function App() {
           workspaceApi={workspaceApi}
           references={references}
           onReferencesChange={setReferences}
+          referencesSupported={getModel(settings.modelId).supportsReferences}
           disabled={isRunning}
         />
         <RunBar

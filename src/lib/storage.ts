@@ -1,9 +1,14 @@
-import type { PromptModule, PromptWorkspace, Settings, VideoSettings } from '../types'
+import type { PromptModule, PromptWorkspace, Provider, Settings, VideoSettings } from '../types'
 import { MODELS, getModel } from './models'
 import { VEO_MODELS } from './veoModels'
 
 const SETTINGS_KEY = 'nbr.settings.v1'
-const API_KEY_KEYS = ['nbr.apiKey', 'nbr.apiKey2', 'nbr.apiKey3'] as const
+// Per-provider key sets — a Gemini key and an xAI key are stored side by side
+// so switching models never means re-entering credentials.
+const PROVIDER_KEY_NAMES: Record<Provider, readonly [string, string, string]> = {
+  gemini: ['nbr.apiKey', 'nbr.apiKey2', 'nbr.apiKey3'],
+  xai: ['nbr.xaiApiKey', 'nbr.xaiApiKey2', 'nbr.xaiApiKey3'],
+}
 // One-shot marker: bumps previously-persisted attempts caps to the new
 // default of 50 without resetting any other stored settings
 const CAP_MIGRATION_KEY = 'nbr.capDefault50'
@@ -16,6 +21,8 @@ export const DEFAULT_SETTINGS: Settings = {
   systemInstruction: '',
   aspectRatio: 'auto',
   imageSize: '1K',
+  xaiResolution: '1k',
+  xaiModelId: '',
   format: 'png',
   targetCount: 5,
   attemptsCap: 50,
@@ -34,6 +41,8 @@ export function loadSettings(): Settings {
       parsed.aspectRatio = 'auto'
     }
     if (!['1K', '2K', '4K'].includes(parsed.imageSize)) parsed.imageSize = '1K'
+    if (parsed.xaiResolution !== '2k') parsed.xaiResolution = '1k'
+    if (typeof parsed.xaiModelId !== 'string') parsed.xaiModelId = ''
     if (parsed.format !== 'jpg') parsed.format = 'png'
     if (typeof parsed.systemInstruction !== 'string') parsed.systemInstruction = ''
     parsed.targetCount = clampInt(parsed.targetCount, 1, 12, 5)
@@ -208,22 +217,24 @@ export function saveSettings(settings: Settings): void {
   }
 }
 
-export function loadApiKeys(): ApiKeys {
+export function loadApiKeys(provider: Provider = 'gemini'): ApiKeys {
+  const names = PROVIDER_KEY_NAMES[provider]
   try {
     return [
-      localStorage.getItem(API_KEY_KEYS[0]) ?? '',
-      localStorage.getItem(API_KEY_KEYS[1]) ?? '',
-      localStorage.getItem(API_KEY_KEYS[2]) ?? '',
+      localStorage.getItem(names[0]) ?? '',
+      localStorage.getItem(names[1]) ?? '',
+      localStorage.getItem(names[2]) ?? '',
     ]
   } catch {
     return ['', '', '']
   }
 }
 
-export function saveApiKey(index: ApiKeyIndex, key: string): void {
+export function saveApiKey(index: ApiKeyIndex, key: string, provider: Provider = 'gemini'): void {
   try {
-    if (key) localStorage.setItem(API_KEY_KEYS[index], key)
-    else localStorage.removeItem(API_KEY_KEYS[index])
+    const name = PROVIDER_KEY_NAMES[provider][index]
+    if (key) localStorage.setItem(name, key)
+    else localStorage.removeItem(name)
   } catch {
     // ignore
   }

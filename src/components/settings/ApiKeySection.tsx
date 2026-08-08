@@ -3,34 +3,43 @@ import { useState } from 'react'
 interface Props {
   apiKeys: [string, string, string]
   onChange: (index: 0 | 1 | 2, key: string) => void
+  // Set for non-Gemini providers so the labels and hints match the service
+  // whose keys are actually being edited
+  providerName?: string
+  placeholder?: string
+  note?: string
 }
 
-export function ApiKeySection({ apiKeys, onChange }: Props) {
+const GEMINI_NOTE =
+  "Keys are stored in this browser's localStorage and sent directly to the Gemini API. Fine for personal " +
+  'use — never deploy this app publicly with your keys. For real parallel throughput, the keys must belong ' +
+  'to different Google Cloud projects (rate limits are per project, not per key).'
+
+export function ApiKeySection({ apiKeys, onChange, providerName, placeholder, note }: Props) {
+  const prefix = providerName ? `${providerName} key` : 'API key'
   return (
     <div className="space-y-3">
       <KeyInput
-        label="API key 1"
+        label={`${prefix} 1`}
         value={apiKeys[0]}
+        placeholder={placeholder}
         onSave={(key) => onChange(0, key)}
       />
       <KeyInput
-        label="API key 2 · optional"
+        label={`${prefix} 2 · optional`}
         hint="Adds a second parallel generation lane"
         value={apiKeys[1]}
+        placeholder={placeholder}
         onSave={(key) => onChange(1, key)}
       />
       <KeyInput
-        label="API key 3 · optional"
+        label={`${prefix} 3 · optional`}
         hint="Adds a third parallel generation lane"
         value={apiKeys[2]}
+        placeholder={placeholder}
         onSave={(key) => onChange(2, key)}
       />
-      <p className="text-[10px] leading-snug text-zinc-600">
-        Keys are stored in this browser's localStorage and sent directly to the Gemini API. Fine
-        for personal use — never deploy this app publicly with your keys. For real parallel
-        throughput, the keys must belong to different Google Cloud projects (rate limits are per
-        project, not per key).
-      </p>
+      <p className="text-[10px] leading-snug text-zinc-600">{note ?? GEMINI_NOTE}</p>
     </div>
   )
 }
@@ -39,11 +48,13 @@ function KeyInput({
   label,
   hint,
   value,
+  placeholder,
   onSave,
 }: {
   label: string
   hint?: string
   value: string
+  placeholder?: string
   onSave: (key: string) => void
 }) {
   const [show, setShow] = useState(false)
@@ -63,7 +74,7 @@ function KeyInput({
           type={show ? 'text' : 'password'}
           value={draft}
           onChange={(e) => setDraft(e.target.value.trim())}
-          placeholder="AIza…"
+          placeholder={placeholder ?? 'AIza…'}
           autoComplete="off"
           spellCheck={false}
           className="min-w-0 flex-1 rounded-md border border-zinc-700 bg-zinc-900 px-2.5 py-1.5 text-xs text-zinc-200 placeholder-zinc-600 outline-none focus:border-blue-500"

@@ -13,6 +13,9 @@ interface Props {
   workspaceApi: PromptWorkspaceApi
   references: ReferenceImage[]
   onReferencesChange: (refs: ReferenceImage[]) => void
+  // False for models whose API takes reference images through a different
+  // endpoint than the one this app calls
+  referencesSupported?: boolean
   disabled: boolean
 }
 
@@ -22,6 +25,7 @@ export function PromptPanel({
   workspaceApi,
   references,
   onReferencesChange,
+  referencesSupported = true,
   disabled,
 }: Props) {
   const [dragOver, setDragOver] = useState(false)
@@ -107,6 +111,12 @@ export function PromptPanel({
           Reference images <span className="font-normal text-zinc-600">(optional — drag &amp; drop or click +)</span>
         </div>
         <ReferenceImageStrip references={references} onChange={onReferencesChange} disabled={disabled} />
+        {!referencesSupported && references.length > 0 && (
+          <p className="mt-2 text-[10px] text-amber-400/90">
+            The selected xAI model is called through the text-to-image endpoint, which takes no reference
+            images — these are kept but not sent. Switch to a Gemini model to use them.
+          </p>
+        )}
       </div>
     </div>
   )

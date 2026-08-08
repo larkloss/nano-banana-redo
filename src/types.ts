@@ -4,11 +4,20 @@ export type ImageSize = '1K' | '2K' | '4K'
 
 export type OutputFormat = 'png' | 'jpg'
 
+export type Provider = 'gemini' | 'xai'
+
+// xAI's image resolution switch (distinct from Gemini's 1K/2K/4K imageSize)
+export type XaiResolution = '1k' | '2k'
+
 export interface Settings {
   modelId: string
   systemInstruction: string
   aspectRatio: AspectRatio
   imageSize: ImageSize
+  xaiResolution: XaiResolution
+  // Overrides the selected xAI preset's ID — lets a brand-new model be used
+  // by typing its ID, without waiting for a code change. Empty = use preset.
+  xaiModelId: string
   format: OutputFormat
   targetCount: number
   attemptsCap: number

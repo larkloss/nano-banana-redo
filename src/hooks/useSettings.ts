@@ -1,11 +1,12 @@
-import { useEffect, useRef, useState } from 'react'
-import type { Settings } from '../types'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import type { Provider, Settings } from '../types'
 import { loadSettings, saveSettings, loadApiKeys, saveApiKey, type ApiKeys, type ApiKeyIndex } from '../lib/storage'
-import { getModel } from '../lib/models'
+import { getModel, getProvider } from '../lib/models'
 
 export function useSettings() {
   const [settings, setSettings] = useState<Settings>(loadSettings)
-  const [apiKeys, setApiKeysState] = useState<ApiKeys>(loadApiKeys)
+  const [geminiKeys, setGeminiKeys] = useState<ApiKeys>(() => loadApiKeys('gemini'))
+  const [xaiKeys, setXaiKeys] = useState<ApiKeys>(() => loadApiKeys('xai'))
   const saveTimer = useRef<number | undefined>(undefined)
 
   useEffect(() => {
@@ -13,6 +14,9 @@ export function useSettings() {
     saveTimer.current = window.setTimeout(() => saveSettings(settings), 500)
     return () => clearTimeout(saveTimer.current)
   }, [settings])
+
+  const provider = getProvider(settings.modelId)
+  const apiKeys = provider === 'xai' ? xaiKeys : geminiKeys
 
   const update = (patch: Partial<Settings>) => {
     setSettings((prev) => {
@@ -24,19 +28,28 @@ export function useSettings() {
           next.aspectRatio = 'auto'
         }
         if (!model.supportsImageSize) next.imageSize = '1K'
+        // A typed model-ID override belongs to the model it was typed for
+        if (getProvider(patch.modelId) !== getProvider(prev.modelId)) next.xaiModelId = ''
       }
       return next
     })
   }
 
+  // Writes to whichever provider's key set is currently selected
   const setApiKey = (index: ApiKeyIndex, key: string) => {
-    setApiKeysState((prev) => {
+    const setter = provider === 'xai' ? setXaiKeys : setGeminiKeys
+    setter((prev) => {
       const next: ApiKeys = [...prev]
       next[index] = key
       return next
     })
-    saveApiKey(index, key)
+    saveApiKey(index, key, provider)
   }
 
-  return { settings, update, apiKeys, setApiKey }
+  const keysByProvider = useMemo<Record<Provider, ApiKeys>>(
+    () => ({ gemini: geminiKeys, xai: xaiKeys }),
+    [geminiKeys, xaiKeys],
+  )
+
+  return { settings, update, provider, apiKeys, setApiKey, keysByProvider }
 }

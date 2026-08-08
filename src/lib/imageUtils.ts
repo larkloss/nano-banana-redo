@@ -21,6 +21,10 @@ export async function processImagePart(
   if (format === 'jpg' && part.mimeType !== 'image/jpeg') {
     blob = await toJpeg(bitmap)
     mimeType = 'image/jpeg'
+  } else if (format === 'png' && part.mimeType !== 'image/png') {
+    // xAI returns JPEG — re-encode so a .png filename holds real PNG bytes
+    blob = await toPng(bitmap)
+    mimeType = 'image/png'
   }
   const image: GeneratedImage = {
     id: crypto.randomUUID(),
@@ -36,6 +40,12 @@ export async function processImagePart(
   }
   bitmap.close()
   return image
+}
+
+async function toPng(bitmap: ImageBitmap): Promise<Blob> {
+  const canvas = new OffscreenCanvas(bitmap.width, bitmap.height)
+  canvas.getContext('2d')!.drawImage(bitmap, 0, 0)
+  return canvas.convertToBlob({ type: 'image/png' })
 }
 
 async function toJpeg(bitmap: ImageBitmap): Promise<Blob> {
