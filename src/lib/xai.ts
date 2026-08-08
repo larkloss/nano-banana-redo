@@ -1,6 +1,7 @@
-import type { ParsedImagePart, Settings } from '../types'
+import type { ParsedImagePart, ParsedResponse, Settings } from '../types'
 import type { GenerateCaller } from './gemini'
 import { base64ToBlob } from './imageUtils'
+import { isModerationMessage } from './errors'
 
 const GENERATE_ENDPOINT = 'https://api.x.ai/v1/images/generations'
 const EDIT_ENDPOINT = 'https://api.x.ai/v1/images/edits'
@@ -14,32 +15,53 @@ export function effectiveXaiModelId(settings: Settings): string {
 }
 
 export const callGenerateXai: GenerateCaller = async ({ apiKey, settings, references }, signal) => {
-  const model = effectiveXaiModelId(settings)
-  // A reference image switches to the edit endpoint, which takes the source
-  // image as a data URI. Multi-source editing is a separate xAI endpoint, so
-  // only the first reference is used here (the UI says so).
-  const source = references[0]
-  const editing = source !== undefined
-
-  const body: Record<string, unknown> = {
-    model,
+  const base = {
+    model: effectiveXaiModelId(settings),
     prompt: settings.prompt,
     response_format: 'b64_json',
     resolution: settings.xaiResolution,
   }
-  if (editing) {
-    const normalized = await normalizeSource(source)
-    body.image = { url: `data:${normalized.mimeType};base64,${normalized.base64}`, type: 'image_url' }
-    // Single-source edits inherit the source image's aspect ratio, so sending
-    // one would be meaningless
-  } else {
-    body.n = 1
-    body.aspect_ratio = settings.aspectRatio
+  const sources = await Promise.all(references.map(normalizeSource))
+  const part = (ref: ParsedImagePart) => ({
+    url: `data:${ref.mimeType};base64,${ref.base64}`,
+    type: 'image_url',
+  })
+
+  if (sources.length === 0) {
+    return post(GENERATE_ENDPOINT, { ...base, n: 1, aspect_ratio: settings.aspectRatio }, apiKey, signal)
   }
 
+  // Single-source edits inherit the source image's aspect ratio, so sending
+  // aspect_ratio there would be meaningless — with several sources it applies.
+  const singleBody = { ...base, image: part(sources[0]) }
+  if (sources.length === 1) return post(EDIT_ENDPOINT, singleBody, apiKey, signal)
+
+  try {
+    return await post(
+      EDIT_ENDPOINT,
+      { ...base, images: sources.map(part), aspect_ratio: settings.aspectRatio },
+      apiKey,
+      signal,
+    )
+  } catch (err) {
+    // Multi-source editing is documented separately from the single-image
+    // form; if this shape is rejected, still produce an image from the first
+    // reference rather than failing the attempt. Moderation and auth errors
+    // must propagate — retrying them would just bill twice.
+    if (!isRejectedRequestShape(err)) throw err
+    return post(EDIT_ENDPOINT, singleBody, apiKey, signal)
+  }
+}
+
+async function post(
+  endpoint: string,
+  body: Record<string, unknown>,
+  apiKey: string,
+  signal: AbortSignal,
+): Promise<ParsedResponse> {
   let response: Response
   try {
-    response = await fetch(editing ? EDIT_ENDPOINT : GENERATE_ENDPOINT, {
+    response = await fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
       body: JSON.stringify(body),
@@ -77,6 +99,14 @@ export const callGenerateXai: GenerateCaller = async ({ apiKey, settings, refere
     finishReason: images.length > 0 ? 'STOP' : undefined,
     text: images.length === 0 ? describeEmpty(json) : undefined,
   }
+}
+
+// True only for "the server didn't understand this request body" — never for
+// moderation, auth or rate limits.
+function isRejectedRequestShape(err: unknown): boolean {
+  const status = err && typeof err === 'object' && 'status' in err ? (err as { status?: unknown }).status : undefined
+  if (status !== 400 && status !== 404 && status !== 422) return false
+  return !isModerationMessage(err instanceof Error ? err.message : String(err))
 }
 
 interface XaiImageEntry {

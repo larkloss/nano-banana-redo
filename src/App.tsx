@@ -18,13 +18,14 @@ function App() {
   const effectivePrompt =
     workspaceApi.workspace.mode === 'modular' ? workspaceApi.assembled : settings.prompt
 
-  // xAI edits from a single source image; Gemini takes the whole set inline
+  // With references, Grok goes through the image-edit endpoint instead of
+  // text-to-image, which changes what the other controls do
   const referenceNote =
     provider !== 'xai' || references.length === 0
       ? null
       : references.length > 1
-        ? `Grok edits from one source image — only the first reference ("${references[0].name}") is sent. ` +
-          'Multi-source editing is a separate xAI endpoint this app does not call yet.'
+        ? `Grok edits from these ${references.length} images. If xAI rejects the multi-image request, it ` +
+          `automatically falls back to the first one ("${references[0].name}") so the attempt still produces an image.`
         : 'Grok will edit from this image; the output keeps its aspect ratio, so the ratio buttons are ignored.'
 
   const mock = isMockMode()

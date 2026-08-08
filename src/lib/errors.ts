@@ -26,12 +26,25 @@ export function classifyResponse(parsed: ParsedResponse): AttemptOutcome {
   return { kind: 'empty', reason: `No image in response${detail}` }
 }
 
+// Some providers report a blocked generation as an HTTP error rather than a
+// finish reason (xAI answers 400 with {"code":"imagine:content-moderated"}).
+// That is a per-attempt outcome, not a broken request, so it must be retried
+// like any other moderation block instead of killing the lane.
+const MODERATION_MESSAGE = /content[-_\s]?moderat|moderated|rejected by (?:content )?moderation|safety[-_\s]?(?:filter|system)/i
+
+export function isModerationMessage(message: string): boolean {
+  return MODERATION_MESSAGE.test(message)
+}
+
 export function classifyError(err: unknown): AttemptOutcome {
   if (isAbortError(err)) return { kind: 'aborted' }
 
   const message = err instanceof Error ? err.message : String(err)
   const status = extractStatus(err, message)
 
+  if (isModerationMessage(message)) {
+    return { kind: 'moderation', reason: truncate(extractApiMessage(message) ?? 'Blocked by content moderation', 160) }
+  }
   if (status === 429) {
     return { kind: 'transient', reason: 'Rate limited (429)', retryDelayMs: extractRetryDelayMs(message) }
   }
@@ -76,7 +89,8 @@ function fatalHint(status: number, message: string): string {
 }
 
 function extractApiMessage(message: string): string | null {
-  const m = message.match(/"message"\s*:\s*"([^"]+)"/)
+  // Gemini nests the text under "message"; xAI puts it in "error"
+  const m = message.match(/"message"\s*:\s*"([^"]+)"/) ?? message.match(/"error"\s*:\s*"([^"]+)"/)
   return m ? m[1] : null
 }
 
