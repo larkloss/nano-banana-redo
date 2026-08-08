@@ -16,6 +16,46 @@ export function effectiveXaiModelId(settings: Settings): string {
   return settings.xaiModelId.trim() || settings.modelId
 }
 
+// Asks the account itself which models it can use, so a model released after
+// this app was built can be selected without knowing its ID in advance.
+// Tries the image-specific listing first, then the generic one.
+export async function listXaiModels(apiKey: string, signal?: AbortSignal): Promise<string[]> {
+  const endpoints = ['https://api.x.ai/v1/image-generation-models', 'https://api.x.ai/v1/models']
+  const ids = new Set<string>()
+  let lastError: Error | null = null
+
+  for (const endpoint of endpoints) {
+    try {
+      const res = await fetch(endpoint, { headers: { Authorization: `Bearer ${apiKey}` }, signal })
+      if (!res.ok) {
+        lastError = new Error(`${res.status} ${truncate(await res.text().catch(() => ''), 200)}`)
+        continue
+      }
+      extractModelIds(await res.json()).forEach((id) => ids.add(id))
+      // The image-specific endpoint is authoritative when it answers
+      if (ids.size > 0) return [...ids].sort()
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') throw err
+      lastError = err instanceof Error ? err : new Error(String(err))
+    }
+  }
+
+  if (ids.size === 0 && lastError) throw lastError
+  return [...ids].sort()
+}
+
+function extractModelIds(json: unknown): string[] {
+  const root = json as { data?: unknown; models?: unknown }
+  const rows = Array.isArray(root?.data) ? root.data : Array.isArray(root?.models) ? root.models : []
+  return rows
+    .map((row) => {
+      if (typeof row === 'string') return row
+      const r = row as { id?: unknown; name?: unknown }
+      return typeof r?.id === 'string' ? r.id : typeof r?.name === 'string' ? r.name : null
+    })
+    .filter((id): id is string => typeof id === 'string' && id.length > 0)
+}
+
 export const callGenerateXai: GenerateCaller = async ({ apiKey, settings, references }, signal) => {
   const base = {
     model: effectiveXaiModelId(settings),

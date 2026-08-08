@@ -1,5 +1,7 @@
+import { useState } from 'react'
 import type { Settings } from '../../types'
 import { MODELS, PROVIDER_LABELS, getModel } from '../../lib/models'
+import { listXaiModels } from '../../lib/xai'
 import { ApiKeySection } from './ApiKeySection'
 import { MaxAttemptsControl } from './MaxAttemptsControl'
 import { ExpandableTextarea } from '../common/ExpandableTextarea'
@@ -63,9 +65,13 @@ export function RunSettingsPanel({ settings, onUpdate, apiKeys, onApiKeyChange, 
             className="w-full rounded-md border border-zinc-700 bg-zinc-900 px-2.5 py-1.5 text-xs text-zinc-200 placeholder-zinc-600 outline-none focus:border-blue-500 disabled:opacity-50"
           />
           <p className="mt-1 text-[10px] text-zinc-600">
-            Sent instead of the preset above when filled — paste a newly released model ID (e.g. a fresh Grok
-            image model) to use it right away. Empty = use the preset.
+            Sent instead of the preset above when filled. Empty = use the preset.
           </p>
+          <XaiModelDiscovery
+            apiKey={apiKeys.find(Boolean) ?? ''}
+            disabled={disabled}
+            onPick={(id) => onUpdate({ xaiModelId: id })}
+          />
         </Field>
       )}
 
@@ -199,6 +205,70 @@ export function RunSettingsPanel({ settings, onUpdate, apiKeys, onApiKeyChange, 
         />
       </div>
     </aside>
+  )
+}
+
+// Lists the model IDs the key itself can use — the only reliable way to learn
+// the ID of a model released after this app was built.
+function XaiModelDiscovery({
+  apiKey,
+  disabled,
+  onPick,
+}: {
+  apiKey: string
+  disabled: boolean
+  onPick: (id: string) => void
+}) {
+  const [state, setState] = useState<
+    { status: 'idle' } | { status: 'loading' } | { status: 'done'; ids: string[] } | { status: 'error'; message: string }
+  >({ status: 'idle' })
+
+  const fetchModels = async () => {
+    setState({ status: 'loading' })
+    try {
+      const ids = await listXaiModels(apiKey)
+      setState({ status: 'done', ids })
+    } catch (err) {
+      setState({ status: 'error', message: err instanceof Error ? err.message : String(err) })
+    }
+  }
+
+  const imageIds = state.status === 'done' ? state.ids.filter((id) => /imag/i.test(id)) : []
+  const shown = state.status === 'done' ? (imageIds.length > 0 ? imageIds : state.ids) : []
+
+  return (
+    <div className="mt-2">
+      <button
+        type="button"
+        onClick={() => void fetchModels()}
+        disabled={disabled || !apiKey || state.status === 'loading'}
+        title={apiKey ? 'Ask xAI which models this key can use' : 'Enter your xAI API key below first'}
+        className="rounded-md border border-zinc-700 px-2.5 py-1 text-[10px] text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 disabled:opacity-40"
+      >
+        {state.status === 'loading' ? 'Loading…' : 'List models my key can use'}
+      </button>
+      {state.status === 'error' && (
+        <p className="mt-1.5 text-[10px] text-red-400">Could not list models — {state.message}</p>
+      )}
+      {state.status === 'done' && shown.length === 0 && (
+        <p className="mt-1.5 text-[10px] text-amber-400/90">The API returned no model list for this key.</p>
+      )}
+      {shown.length > 0 && (
+        <div className="mt-1.5 flex flex-wrap gap-1">
+          {shown.map((id) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => onPick(id)}
+              disabled={disabled}
+              className="rounded border border-zinc-700 bg-zinc-900 px-1.5 py-0.5 text-[10px] text-blue-300 hover:border-blue-500 disabled:opacity-40"
+            >
+              {id}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
   )
 }
 
