@@ -7,6 +7,8 @@ const GENERATE_ENDPOINT = 'https://api.x.ai/v1/images/generations'
 const EDIT_ENDPOINT = 'https://api.x.ai/v1/images/edits'
 // xAI accepts jpg/jpeg and png source images only
 const XAI_INPUT_TYPES = new Set(['image/png', 'image/jpeg'])
+// Documented ceiling for multi-image editing
+export const MAX_XAI_SOURCES = 3
 
 // The dropdown preset can be overridden by a typed model ID so a newly
 // released xAI model works without a code change.
@@ -21,7 +23,7 @@ export const callGenerateXai: GenerateCaller = async ({ apiKey, settings, refere
     response_format: 'b64_json',
     resolution: settings.xaiResolution,
   }
-  const sources = await Promise.all(references.map(normalizeSource))
+  const sources = await Promise.all(references.slice(0, MAX_XAI_SOURCES).map(normalizeSource))
   const part = (ref: ParsedImagePart) => ({
     url: `data:${ref.mimeType};base64,${ref.base64}`,
     type: 'image_url',
@@ -32,14 +34,20 @@ export const callGenerateXai: GenerateCaller = async ({ apiKey, settings, refere
   }
 
   // Single-source edits inherit the source image's aspect ratio, so sending
-  // aspect_ratio there would be meaningless — with several sources it applies.
+  // aspect_ratio there would be meaningless.
   const singleBody = { ...base, image: part(sources[0]) }
   if (sources.length === 1) return post(EDIT_ENDPOINT, singleBody, apiKey, signal)
 
   try {
     return await post(
       EDIT_ENDPOINT,
-      { ...base, images: sources.map(part), aspect_ratio: settings.aspectRatio },
+      {
+        ...base,
+        images: sources.map(part),
+        // Multi-source output follows the first image unless a specific ratio
+        // is requested — so "Auto" means send nothing and keep that default
+        ...(settings.aspectRatio === 'auto' ? {} : { aspect_ratio: settings.aspectRatio }),
+      },
       apiKey,
       signal,
     )

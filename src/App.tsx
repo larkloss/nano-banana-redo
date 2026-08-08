@@ -8,6 +8,7 @@ import { PromptPanel } from './components/prompt/PromptPanel'
 import { RunBar } from './components/run/RunBar'
 import { Gallery } from './components/gallery/Gallery'
 import { isMockMode } from './lib/mockGemini'
+import { MAX_XAI_SOURCES } from './lib/xai'
 
 function App() {
   const { settings, update, provider, apiKeys, setApiKey } = useSettings()
@@ -23,10 +24,12 @@ function App() {
   const referenceNote =
     provider !== 'xai' || references.length === 0
       ? null
-      : references.length > 1
-        ? `Grok edits from these ${references.length} images. If xAI rejects the multi-image request, it ` +
-          `automatically falls back to the first one ("${references[0].name}") so the attempt still produces an image.`
-        : 'Grok will edit from this image; the output keeps its aspect ratio, so the ratio buttons are ignored.'
+      : references.length > MAX_XAI_SOURCES
+        ? `xAI accepts at most ${MAX_XAI_SOURCES} source images — only the first ${MAX_XAI_SOURCES} are sent.`
+        : references.length > 1
+          ? `Grok edits from these ${references.length} images, in the order shown. The first one sets the output ` +
+            'aspect ratio unless you pick a specific ratio above.'
+          : 'Grok will edit from this image; the output keeps its aspect ratio, so the ratio buttons are ignored.'
 
   const mock = isMockMode()
   const activeKeys = mock
@@ -72,6 +75,7 @@ function App() {
           references={references}
           onReferencesChange={setReferences}
           referenceNote={referenceNote}
+          maxReferences={provider === 'xai' ? MAX_XAI_SOURCES : 6}
           disabled={isRunning}
         />
         <RunBar

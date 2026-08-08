@@ -15,6 +15,7 @@ interface Props {
   onReferencesChange: (refs: ReferenceImage[]) => void
   // Provider-specific caveat about how the references will actually be used
   referenceNote?: string | null
+  maxReferences?: number
   disabled: boolean
 }
 
@@ -25,6 +26,7 @@ export function PromptPanel({
   references,
   onReferencesChange,
   referenceNote,
+  maxReferences = 6,
   disabled,
 }: Props) {
   const [dragOver, setDragOver] = useState(false)
@@ -48,7 +50,7 @@ export function PromptPanel({
         }
       }),
     )
-    onReferencesChange([...references, ...added].slice(0, 6))
+    onReferencesChange([...references, ...added].slice(0, maxReferences))
   }
 
   return (
@@ -109,7 +111,12 @@ export function PromptPanel({
         <div className="mb-2 text-xs font-medium text-zinc-400">
           Reference images <span className="font-normal text-zinc-600">(optional — drag &amp; drop or click +)</span>
         </div>
-        <ReferenceImageStrip references={references} onChange={onReferencesChange} disabled={disabled} />
+        <ReferenceImageStrip
+          references={references}
+          onChange={onReferencesChange}
+          disabled={disabled}
+          max={maxReferences}
+        />
         {referenceNote && <p className="mt-2 text-[10px] text-amber-400/90">{referenceNote}</p>}
       </div>
     </div>
