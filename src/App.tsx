@@ -8,7 +8,6 @@ import { PromptPanel } from './components/prompt/PromptPanel'
 import { RunBar } from './components/run/RunBar'
 import { Gallery } from './components/gallery/Gallery'
 import { isMockMode } from './lib/mockGemini'
-import { getModel } from './lib/models'
 
 function App() {
   const { settings, update, provider, apiKeys, setApiKey } = useSettings()
@@ -18,6 +17,15 @@ function App() {
 
   const effectivePrompt =
     workspaceApi.workspace.mode === 'modular' ? workspaceApi.assembled : settings.prompt
+
+  // xAI edits from a single source image; Gemini takes the whole set inline
+  const referenceNote =
+    provider !== 'xai' || references.length === 0
+      ? null
+      : references.length > 1
+        ? `Grok edits from one source image — only the first reference ("${references[0].name}") is sent. ` +
+          'Multi-source editing is a separate xAI endpoint this app does not call yet.'
+        : 'Grok will edit from this image; the output keeps its aspect ratio, so the ratio buttons are ignored.'
 
   const mock = isMockMode()
   const activeKeys = mock
@@ -62,7 +70,7 @@ function App() {
           workspaceApi={workspaceApi}
           references={references}
           onReferencesChange={setReferences}
-          referencesSupported={getModel(settings.modelId).supportsReferences}
+          referenceNote={referenceNote}
           disabled={isRunning}
         />
         <RunBar

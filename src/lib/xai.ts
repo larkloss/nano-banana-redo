@@ -1,7 +1,11 @@
 import type { ParsedImagePart, Settings } from '../types'
 import type { GenerateCaller } from './gemini'
+import { base64ToBlob } from './imageUtils'
 
-const ENDPOINT = 'https://api.x.ai/v1/images/generations'
+const GENERATE_ENDPOINT = 'https://api.x.ai/v1/images/generations'
+const EDIT_ENDPOINT = 'https://api.x.ai/v1/images/edits'
+// xAI accepts jpg/jpeg and png source images only
+const XAI_INPUT_TYPES = new Set(['image/png', 'image/jpeg'])
 
 // The dropdown preset can be overridden by a typed model ID so a newly
 // released xAI model works without a code change.
@@ -9,19 +13,33 @@ export function effectiveXaiModelId(settings: Settings): string {
   return settings.xaiModelId.trim() || settings.modelId
 }
 
-export const callGenerateXai: GenerateCaller = async ({ apiKey, settings }, signal) => {
-  const body = {
-    model: effectiveXaiModelId(settings),
+export const callGenerateXai: GenerateCaller = async ({ apiKey, settings, references }, signal) => {
+  const model = effectiveXaiModelId(settings)
+  // A reference image switches to the edit endpoint, which takes the source
+  // image as a data URI. Multi-source editing is a separate xAI endpoint, so
+  // only the first reference is used here (the UI says so).
+  const source = references[0]
+  const editing = source !== undefined
+
+  const body: Record<string, unknown> = {
+    model,
     prompt: settings.prompt,
-    n: 1,
     response_format: 'b64_json',
-    aspect_ratio: settings.aspectRatio,
     resolution: settings.xaiResolution,
+  }
+  if (editing) {
+    const normalized = await normalizeSource(source)
+    body.image = { url: `data:${normalized.mimeType};base64,${normalized.base64}`, type: 'image_url' }
+    // Single-source edits inherit the source image's aspect ratio, so sending
+    // one would be meaningless
+  } else {
+    body.n = 1
+    body.aspect_ratio = settings.aspectRatio
   }
 
   let response: Response
   try {
-    response = await fetch(ENDPOINT, {
+    response = await fetch(editing ? EDIT_ENDPOINT : GENERATE_ENDPOINT, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
       body: JSON.stringify(body),
@@ -70,6 +88,18 @@ interface XaiImageEntry {
 interface XaiImageResponse {
   data?: XaiImageEntry[]
   error?: { message?: string }
+}
+
+// Re-encodes anything that isn't png/jpeg (e.g. a dropped webp) so the API
+// doesn't reject an otherwise valid reference image.
+async function normalizeSource(ref: ParsedImagePart): Promise<ParsedImagePart> {
+  if (XAI_INPUT_TYPES.has(ref.mimeType)) return ref
+  const bitmap = await createImageBitmap(base64ToBlob(ref.base64, ref.mimeType))
+  const canvas = new OffscreenCanvas(bitmap.width, bitmap.height)
+  canvas.getContext('2d')!.drawImage(bitmap, 0, 0)
+  bitmap.close()
+  const blob = await canvas.convertToBlob({ type: 'image/png' })
+  return { base64: await blobToBase64(blob), mimeType: 'image/png' }
 }
 
 async function toImagePart(entry: XaiImageEntry, signal: AbortSignal): Promise<ParsedImagePart | null> {
