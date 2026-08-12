@@ -9,12 +9,16 @@ export type Provider = 'gemini' | 'xai'
 // xAI's image resolution switch (distinct from Gemini's 1K/2K/4K imageSize)
 export type XaiResolution = '1k' | '2k'
 
+// Only grok-imagine-image-2.0 accepts this; medium is the server default
+export type XaiQuality = 'low' | 'medium'
+
 export interface Settings {
   modelId: string
   systemInstruction: string
   aspectRatio: AspectRatio
   imageSize: ImageSize
   xaiResolution: XaiResolution
+  xaiQuality: XaiQuality
   // Overrides the selected xAI preset's ID — lets a brand-new model be used
   // by typing its ID, without waiting for a code change. Empty = use preset.
   xaiModelId: string

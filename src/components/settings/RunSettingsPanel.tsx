@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import type { Settings } from '../../types'
 import { MODELS, PROVIDER_LABELS, getModel } from '../../lib/models'
-import { listXaiModels } from '../../lib/xai'
+import { listXaiModels, effectiveXaiModelId, supportsXaiQuality } from '../../lib/xai'
 import { ApiKeySection } from './ApiKeySection'
 import { MaxAttemptsControl } from './MaxAttemptsControl'
 import { ExpandableTextarea } from '../common/ExpandableTextarea'
@@ -147,6 +147,27 @@ export function RunSettingsPanel({ settings, onUpdate, apiKeys, onApiKeyChange, 
               </Chip>
             ))}
           </div>
+        </Field>
+      )}
+
+      {isXai && supportsXaiQuality(effectiveXaiModelId(settings)) && (
+        <Field label="Quality">
+          <div className="grid grid-cols-2 gap-1.5">
+            {(['medium', 'low'] as const).map((q) => (
+              <Chip
+                key={q}
+                active={settings.xaiQuality === q}
+                onClick={() => onUpdate({ xaiQuality: q })}
+                disabled={disabled}
+                wide
+              >
+                {q === 'medium' ? 'Medium (default)' : 'Low'}
+              </Chip>
+            ))}
+          </div>
+          <p className="mt-1 text-[10px] text-zinc-600">
+            Only Grok Imagine 2.0 accepts this — it is left out of the request for every other model.
+          </p>
         </Field>
       )}
 

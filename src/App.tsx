@@ -29,7 +29,7 @@ function App() {
         : references.length > 1
           ? `Grok edits from these ${references.length} images, in the order shown. The first one sets the output ` +
             'aspect ratio unless you pick a specific ratio above.'
-          : 'Grok will edit from this image; the output keeps its aspect ratio, so the ratio buttons are ignored.'
+          : 'Grok will edit from this image. On "Auto" the output keeps the source ratio — pick a specific ratio to override it.'
 
   const mock = isMockMode()
   const activeKeys = mock

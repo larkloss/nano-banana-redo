@@ -16,6 +16,12 @@ export function effectiveXaiModelId(settings: Settings): string {
   return settings.xaiModelId.trim() || settings.modelId
 }
 
+// The quality parameter is documented as 2.0-only, so it is keyed off the
+// model ID actually being sent (which may come from the override field).
+export function supportsXaiQuality(modelId: string): boolean {
+  return /image-2(?:[.\-_]|$)/i.test(modelId)
+}
+
 // Asks the account itself which models it can use, so a model released after
 // this app was built can be selected without knowing its ID in advance.
 // Tries the image-specific listing first, then the generic one.
@@ -57,12 +63,17 @@ function extractModelIds(json: unknown): string[] {
 }
 
 export const callGenerateXai: GenerateCaller = async ({ apiKey, settings, references }, signal) => {
+  const modelId = effectiveXaiModelId(settings)
   const base = {
-    model: effectiveXaiModelId(settings),
+    model: modelId,
     prompt: settings.prompt,
     response_format: 'b64_json',
     resolution: settings.xaiResolution,
+    ...(supportsXaiQuality(modelId) ? { quality: settings.xaiQuality } : {}),
   }
+  // "Auto" means "let the default apply": the model picks a ratio when
+  // generating, and edits keep the (first) source image's ratio.
+  const ratioOverride = settings.aspectRatio === 'auto' ? {} : { aspect_ratio: settings.aspectRatio }
   const sources = await Promise.all(references.slice(0, MAX_XAI_SOURCES).map(normalizeSource))
   const part = (ref: ParsedImagePart) => ({
     url: `data:${ref.mimeType};base64,${ref.base64}`,
@@ -73,24 +84,11 @@ export const callGenerateXai: GenerateCaller = async ({ apiKey, settings, refere
     return post(GENERATE_ENDPOINT, { ...base, n: 1, aspect_ratio: settings.aspectRatio }, apiKey, signal)
   }
 
-  // Single-source edits inherit the source image's aspect ratio, so sending
-  // aspect_ratio there would be meaningless.
-  const singleBody = { ...base, image: part(sources[0]) }
+  const singleBody = { ...base, ...ratioOverride, image: part(sources[0]) }
   if (sources.length === 1) return post(EDIT_ENDPOINT, singleBody, apiKey, signal)
 
   try {
-    return await post(
-      EDIT_ENDPOINT,
-      {
-        ...base,
-        images: sources.map(part),
-        // Multi-source output follows the first image unless a specific ratio
-        // is requested — so "Auto" means send nothing and keep that default
-        ...(settings.aspectRatio === 'auto' ? {} : { aspect_ratio: settings.aspectRatio }),
-      },
-      apiKey,
-      signal,
-    )
+    return await post(EDIT_ENDPOINT, { ...base, ...ratioOverride, images: sources.map(part) }, apiKey, signal)
   } catch (err) {
     // Multi-source editing is documented separately from the single-image
     // form; if this shape is rejected, still produce an image from the first

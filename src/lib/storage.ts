@@ -22,6 +22,7 @@ export const DEFAULT_SETTINGS: Settings = {
   aspectRatio: 'auto',
   imageSize: '1K',
   xaiResolution: '1k',
+  xaiQuality: 'medium',
   xaiModelId: '',
   format: 'png',
   targetCount: 5,
@@ -42,6 +43,7 @@ export function loadSettings(): Settings {
     }
     if (!['1K', '2K', '4K'].includes(parsed.imageSize)) parsed.imageSize = '1K'
     if (parsed.xaiResolution !== '2k') parsed.xaiResolution = '1k'
+    if (parsed.xaiQuality !== 'low') parsed.xaiQuality = 'medium'
     if (typeof parsed.xaiModelId !== 'string') parsed.xaiModelId = ''
     if (parsed.format !== 'jpg') parsed.format = 'png'
     if (typeof parsed.systemInstruction !== 'string') parsed.systemInstruction = ''
