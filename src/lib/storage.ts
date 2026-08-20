@@ -30,25 +30,34 @@ export const DEFAULT_SETTINGS: Settings = {
   prompt: '',
 }
 
+// Shared by localStorage loading and by settings adopted from a synced file,
+// so anything hand-edited or written by an older version is clamped the same
+// way. Never carries API keys — those live in their own storage entries.
+export function normalizeSettings(raw: unknown): Settings {
+  const parsed = { ...DEFAULT_SETTINGS, ...(raw as Partial<Settings>) } as Settings
+  if (!MODELS.some((m) => m.id === parsed.modelId)) parsed.modelId = DEFAULT_SETTINGS.modelId
+  const model = getModel(parsed.modelId)
+  if (parsed.aspectRatio !== 'auto' && !model.aspectRatios.includes(parsed.aspectRatio)) {
+    parsed.aspectRatio = 'auto'
+  }
+  if (!['1K', '2K', '4K'].includes(parsed.imageSize)) parsed.imageSize = '1K'
+  if (parsed.xaiResolution !== '2k') parsed.xaiResolution = '1k'
+  if (parsed.xaiQuality !== 'low') parsed.xaiQuality = 'medium'
+  if (typeof parsed.xaiModelId !== 'string') parsed.xaiModelId = ''
+  if (parsed.format !== 'jpg') parsed.format = 'png'
+  if (typeof parsed.systemInstruction !== 'string') parsed.systemInstruction = ''
+  if (typeof parsed.prompt !== 'string') parsed.prompt = ''
+  parsed.targetCount = clampInt(parsed.targetCount, 1, 12, 5)
+  parsed.attemptsCap = clampInt(parsed.attemptsCap, 1, 200, 50)
+  return parsed
+}
+
 export function loadSettings(): Settings {
   const migrateCap = consumeCapMigration(CAP_MIGRATION_KEY)
   try {
     const raw = localStorage.getItem(SETTINGS_KEY)
     if (!raw) return DEFAULT_SETTINGS
-    const parsed = { ...DEFAULT_SETTINGS, ...JSON.parse(raw) } as Settings
-    if (!MODELS.some((m) => m.id === parsed.modelId)) parsed.modelId = DEFAULT_SETTINGS.modelId
-    const model = getModel(parsed.modelId)
-    if (parsed.aspectRatio !== 'auto' && !model.aspectRatios.includes(parsed.aspectRatio)) {
-      parsed.aspectRatio = 'auto'
-    }
-    if (!['1K', '2K', '4K'].includes(parsed.imageSize)) parsed.imageSize = '1K'
-    if (parsed.xaiResolution !== '2k') parsed.xaiResolution = '1k'
-    if (parsed.xaiQuality !== 'low') parsed.xaiQuality = 'medium'
-    if (typeof parsed.xaiModelId !== 'string') parsed.xaiModelId = ''
-    if (parsed.format !== 'jpg') parsed.format = 'png'
-    if (typeof parsed.systemInstruction !== 'string') parsed.systemInstruction = ''
-    parsed.targetCount = clampInt(parsed.targetCount, 1, 12, 5)
-    parsed.attemptsCap = clampInt(parsed.attemptsCap, 1, 200, 50)
+    const parsed = normalizeSettings(JSON.parse(raw))
     if (migrateCap) {
       parsed.attemptsCap = DEFAULT_SETTINGS.attemptsCap
       saveSettings(parsed)

@@ -3,7 +3,9 @@ import type { Settings } from '../../types'
 import { MODELS, PROVIDER_LABELS, getModel } from '../../lib/models'
 import { listXaiModels, effectiveXaiModelId, supportsXaiQuality } from '../../lib/xai'
 import { ApiKeySection } from './ApiKeySection'
+import { SyncSection } from './SyncSection'
 import { MaxAttemptsControl } from './MaxAttemptsControl'
+import type { usePromptFileSync } from '../../hooks/usePromptFileSync'
 import { ExpandableTextarea } from '../common/ExpandableTextarea'
 
 interface Props {
@@ -11,6 +13,7 @@ interface Props {
   onUpdate: (patch: Partial<Settings>) => void
   apiKeys: [string, string, string]
   onApiKeyChange: (index: 0 | 1 | 2, key: string) => void
+  sync: ReturnType<typeof usePromptFileSync>
   disabled: boolean
 }
 
@@ -25,13 +28,23 @@ const XAI_KEY_NOTE =
   "Keys are stored in this browser's localStorage and sent directly to api.x.ai. Get one from the xAI " +
   'console — a Gemini key will not work here, and vice versa. Each provider keeps its own keys.'
 
-export function RunSettingsPanel({ settings, onUpdate, apiKeys, onApiKeyChange, disabled }: Props) {
+export function RunSettingsPanel({ settings, onUpdate, apiKeys, onApiKeyChange, sync, disabled }: Props) {
   const model = getModel(settings.modelId)
   const isXai = model.provider === 'xai'
 
   return (
     <aside className="flex h-full w-80 shrink-0 flex-col gap-5 overflow-y-auto border-l border-zinc-800 bg-zinc-925 bg-zinc-900/40 p-4">
       <h2 className="text-sm font-semibold text-zinc-300">Run settings</h2>
+
+      <SyncSection
+        status={sync.status}
+        onConnectNew={() => void sync.connectNew()}
+        onConnectExisting={() => void sync.connectExisting()}
+        onGrantPermission={() => void sync.grantPermission()}
+        onDisconnect={() => void sync.disconnect()}
+        onPull={() => void sync.pullNow()}
+        disabled={disabled}
+      />
 
       <Field label="Model">
         <select

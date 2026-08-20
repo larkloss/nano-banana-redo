@@ -1,5 +1,7 @@
-import { useEffect } from 'react'
+import { useCallback, useEffect } from 'react'
 import { useSettings } from './hooks/useSettings'
+import { usePromptFileSync } from './hooks/usePromptFileSync'
+import type { PromptFilePayload } from './lib/promptFile'
 import { usePromptWorkspace } from './hooks/usePromptWorkspace'
 import { useGenerationEngine } from './hooks/useGenerationEngine'
 import { usePersistedReferences } from './hooks/usePersistedReferences'
@@ -11,8 +13,19 @@ import { isMockMode } from './lib/mockGemini'
 import { MAX_XAI_SOURCES } from './lib/xai'
 
 function App() {
-  const { settings, update, provider, apiKeys, setApiKey } = useSettings()
+  const { settings, update, replaceSettings, provider, apiKeys, setApiKey } = useSettings()
   const workspaceApi = usePromptWorkspace()
+  const { replaceWorkspace } = workspaceApi
+  const adoptFromFile = useCallback(
+    (payload: PromptFilePayload) => {
+      replaceWorkspace(payload.workspace)
+      replaceSettings(payload.settings)
+    },
+    // replaceSettings is stable for the component's lifetime
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [replaceWorkspace],
+  )
+  const sync = usePromptFileSync({ workspace: workspaceApi.workspace, settings, onAdopt: adoptFromFile })
   const { runState, images, start, stop, clearImages, isRunning } = useGenerationEngine()
   const [references, setReferences] = usePersistedReferences('generator')
 
@@ -93,6 +106,7 @@ function App() {
         onUpdate={update}
         apiKeys={apiKeys}
         onApiKeyChange={setApiKey}
+        sync={sync}
         disabled={isRunning}
       />
     </div>

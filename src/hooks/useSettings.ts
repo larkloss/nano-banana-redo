@@ -35,6 +35,10 @@ export function useSettings() {
     })
   }
 
+  // Wholesale swap from a synced file — API keys are not part of Settings and
+  // therefore never travel with it
+  const replaceSettings = (next: Settings) => setSettings(next)
+
   // Writes to whichever provider's key set is currently selected
   const setApiKey = (index: ApiKeyIndex, key: string) => {
     const setter = provider === 'xai' ? setXaiKeys : setGeminiKeys
@@ -51,5 +55,5 @@ export function useSettings() {
     [geminiKeys, xaiKeys],
   )
 
-  return { settings, update, provider, apiKeys, setApiKey, keysByProvider }
+  return { settings, update, replaceSettings, provider, apiKeys, setApiKey, keysByProvider }
 }

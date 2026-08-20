@@ -108,9 +108,13 @@ export function usePromptWorkspace(storageKey?: string, defaultNames?: string[])
       ),
     }))
 
+  // Wholesale swap, used when a synced file turns out to be newer
+  const replaceWorkspace = (next: PromptWorkspace) => setWorkspace(next)
+
   return {
     workspace,
     assembled,
+    replaceWorkspace,
     setMode,
     patchModule,
     setModuleText,
