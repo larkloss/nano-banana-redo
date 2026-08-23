@@ -158,23 +158,35 @@ export function usePromptFileSync({ workspace, settings, onAdopt }: Params) {
     return () => clearTimeout(writeTimer.current)
   }, [workspace, settings, push, status.kind])
 
-  const connectNew = useCallback(async () => {
-    const handle = await pickNewSyncFile()
-    if (handle) await connect(handle, { force: 'push' })
-  }, [connect])
+  // A picker that refuses to open must say why — silently doing nothing looks
+  // like a dead button. Cancelling still resolves to null and stays quiet.
+  const runPicker = useCallback(
+    async (pick: () => Promise<SyncFileHandle | null>, force: 'push' | 'pull') => {
+      try {
+        const handle = await pick()
+        if (handle) await connect(handle, { force })
+      } catch (err) {
+        setStatus({ kind: 'error', fileName: null, message: describePickerError(err) })
+      }
+    },
+    [connect],
+  )
+
+  const connectNew = useCallback(() => runPicker(pickNewSyncFile, 'push'), [runPicker])
 
   // Picking an existing file means "use what's in it" — never the reverse
-  const connectExisting = useCallback(async () => {
-    const handle = await pickExistingSyncFile()
-    if (handle) await connect(handle, { force: 'pull' })
-  }, [connect])
+  const connectExisting = useCallback(() => runPicker(pickExistingSyncFile, 'pull'), [runPicker])
 
   const grantPermission = useCallback(async () => {
     const handle = handleRef.current
     if (!handle) return
-    const permission = await checkPermission(handle, true)
-    if (permission === 'granted') await connect(handle)
-    else setStatus({ kind: 'error', fileName: handle.name, message: 'Access to the file was denied' })
+    try {
+      const permission = await checkPermission(handle, true)
+      if (permission === 'granted') await connect(handle)
+      else setStatus({ kind: 'error', fileName: handle.name, message: 'Access to the file was denied' })
+    } catch (err) {
+      setStatus({ kind: 'error', fileName: handle.name, message: describePickerError(err) })
+    }
   }, [connect])
 
   const disconnect = useCallback(async () => {
@@ -191,6 +203,17 @@ export function usePromptFileSync({ workspace, settings, onAdopt }: Params) {
   }, [connect])
 
   return { status, connectNew, connectExisting, grantPermission, disconnect, pullNow, pushNow: () => void push('manual') }
+}
+
+function describePickerError(err: unknown): string {
+  const message = err instanceof Error ? err.message : String(err)
+  if (err instanceof DOMException && err.name === 'SecurityError') {
+    return `This browser blocked the file picker here (${message}). Opening the page over http:// instead of a local file usually fixes it.`
+  }
+  if (/gesture|activation/i.test(message)) {
+    return 'The browser wanted a fresh click to open the file picker — press the button again.'
+  }
+  return message
 }
 
 function readLocalStamp(): number {
