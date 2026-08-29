@@ -16,6 +16,8 @@ interface Props {
   // Provider-specific caveat about how the references will actually be used
   referenceNote?: string | null
   maxReferences?: number
+  // Video models take one whole description; the modular builder is hidden
+  singleBox?: boolean
   disabled: boolean
 }
 
@@ -27,6 +29,7 @@ export function PromptPanel({
   onReferencesChange,
   referenceNote,
   maxReferences = 6,
+  singleBox = false,
   disabled,
 }: Props) {
   const [dragOver, setDragOver] = useState(false)
@@ -72,15 +75,24 @@ export function PromptPanel({
       )}
 
       <div className="mb-3 flex items-center justify-between">
-        <div className="flex gap-1 rounded-lg border border-zinc-800 bg-zinc-950/60 p-0.5">
-          <TabButton active={mode === 'modular'} onClick={() => workspaceApi.setMode('modular')} disabled={disabled}>
-            Modular
-          </TabButton>
-          <TabButton active={mode === 'simple'} onClick={() => workspaceApi.setMode('simple')} disabled={disabled}>
-            Simple
-          </TabButton>
-        </div>
-        {mode === 'simple' && (
+        {singleBox ? (
+          <span className="text-xs font-medium text-zinc-400">
+            Video prompt{' '}
+            <span className="font-normal text-zinc-600">
+              — one whole description: scene, camera, action, audio, timing
+            </span>
+          </span>
+        ) : (
+          <div className="flex gap-1 rounded-lg border border-zinc-800 bg-zinc-950/60 p-0.5">
+            <TabButton active={mode === 'modular'} onClick={() => workspaceApi.setMode('modular')} disabled={disabled}>
+              Modular
+            </TabButton>
+            <TabButton active={mode === 'simple'} onClick={() => workspaceApi.setMode('simple')} disabled={disabled}>
+              Simple
+            </TabButton>
+          </div>
+        )}
+        {(singleBox || mode === 'simple') && (
           <button
             type="button"
             onClick={() => void saveTextAsMarkdown(prompt, promptFilename())}
@@ -93,14 +105,18 @@ export function PromptPanel({
         )}
       </div>
 
-      {mode === 'simple' ? (
+      {singleBox || mode === 'simple' ? (
         <ExpandableTextarea
           value={prompt}
           onChange={onPromptChange}
           label="Prompt"
           disabled={disabled}
-          placeholder="Describe the Abigail Chase artwork you want… (your fixed prompt goes here)"
-          rows={8}
+          placeholder={
+            singleBox
+              ? 'Describe the shot — subject, camera move, lighting, audio. Negatives go here too ("no dialogue", "single unbroken shot").'
+              : 'Describe the Abigail Chase artwork you want… (your fixed prompt goes here)'
+          }
+          rows={singleBox ? 10 : 8}
           className="w-full resize-y rounded-md bg-transparent text-sm leading-relaxed text-zinc-200 placeholder-zinc-600 outline-none disabled:opacity-60"
         />
       ) : (

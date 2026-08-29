@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import type { Settings } from '../../types'
-import { MODELS, PROVIDER_LABELS, getModel } from '../../lib/models'
+import { MODELS, OMNI_RESOLUTIONS, PROVIDER_LABELS, getModel } from '../../lib/models'
 import { listXaiModels, effectiveXaiModelId, supportsXaiQuality } from '../../lib/xai'
 import { ApiKeySection } from './ApiKeySection'
 import { SyncSection } from './SyncSection'
@@ -145,6 +145,28 @@ export function RunSettingsPanel({ settings, onUpdate, apiKeys, onApiKeyChange, 
         </Field>
       )}
 
+      {model.output === 'video' && (
+        <Field label="Video resolution">
+          <div className="grid grid-cols-4 gap-1.5">
+            {OMNI_RESOLUTIONS.map((r) => (
+              <Chip
+                key={r}
+                active={settings.omniResolution === r}
+                onClick={() => onUpdate({ omniResolution: r })}
+                disabled={disabled}
+                wide
+              >
+                {r}
+              </Chip>
+            ))}
+          </div>
+          <p className="mt-1 text-[10px] text-zinc-600">
+            360p is the draft tier — roughly a third of the cost and much faster, good for testing a prompt before
+            committing. 1080p and 4K are upscaled and come back as a download link instead of inline data.
+          </p>
+        </Field>
+      )}
+
       {model.supportsResolution && (
         <Field label="Resolution">
           <div className="grid grid-cols-2 gap-1.5">
@@ -184,7 +206,7 @@ export function RunSettingsPanel({ settings, onUpdate, apiKeys, onApiKeyChange, 
         </Field>
       )}
 
-      <Field label="Output format">
+      <Field label="Output format" hidden={model.output === 'video'}>
         <div className="grid grid-cols-2 gap-1.5">
           {FORMATS.map((f) => (
             <Chip
@@ -200,7 +222,7 @@ export function RunSettingsPanel({ settings, onUpdate, apiKeys, onApiKeyChange, 
         </div>
       </Field>
 
-      <Field label={`Number of images · ${settings.targetCount}`}>
+      <Field label={`Number of ${model.output === 'video' ? 'videos' : 'images'} · ${settings.targetCount}`}>
         <input
           type="range"
           min={1}
@@ -306,7 +328,16 @@ function XaiModelDiscovery({
   )
 }
 
-export function Field({ label, children }: { label: string; children: React.ReactNode }) {
+export function Field({
+  label,
+  hidden,
+  children,
+}: {
+  label: string
+  hidden?: boolean
+  children: React.ReactNode
+}) {
+  if (hidden) return null
   return (
     <div>
       <div className="mb-1.5 text-xs font-medium text-zinc-400">{label}</div>

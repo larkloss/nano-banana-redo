@@ -28,6 +28,7 @@ export async function processImagePart(
   }
   const image: GeneratedImage = {
     id: crypto.randomUUID(),
+    kind: 'image',
     blob,
     objectUrl: URL.createObjectURL(blob),
     width: bitmap.width,
@@ -58,7 +59,54 @@ async function toJpeg(bitmap: ImageBitmap): Promise<Blob> {
   return canvas.convertToBlob({ type: 'image/jpeg', quality: 0.92 })
 }
 
+// Video results skip all the canvas work — the bytes are already an mp4; only
+// the dimensions and duration are probed so the card can label them.
+export async function processVideoPart(
+  part: ParsedImagePart,
+  meta: { attempt: number; modelId: string },
+): Promise<GeneratedImage> {
+  const blob = base64ToBlob(part.base64, part.mimeType)
+  const objectUrl = URL.createObjectURL(blob)
+  const probe = await probeVideo(objectUrl)
+  return {
+    id: crypto.randomUUID(),
+    kind: 'video',
+    blob,
+    objectUrl,
+    width: probe.width,
+    height: probe.height,
+    duration: probe.duration,
+    mimeType: part.mimeType,
+    format: 'png',
+    attempt: meta.attempt,
+    modelId: meta.modelId,
+    createdAt: Date.now(),
+  }
+}
+
+function probeVideo(url: string): Promise<{ width: number; height: number; duration: number }> {
+  return new Promise((resolve) => {
+    const video = document.createElement('video')
+    video.preload = 'metadata'
+    const done = () =>
+      resolve({
+        width: video.videoWidth || 0,
+        height: video.videoHeight || 0,
+        duration: Number.isFinite(video.duration) ? video.duration : 0,
+      })
+    video.onloadedmetadata = done
+    video.onerror = () => resolve({ width: 0, height: 0, duration: 0 })
+    video.src = url
+  })
+}
+
 export function makeFilename(image: GeneratedImage, index: number): string {
+  if (image.kind === 'video') {
+    const stamp = new Date(image.createdAt).toISOString().slice(0, 19).replace(/[:T]/g, '-')
+    const slug = getModel(image.modelId).filenameSlug
+    const ext = image.mimeType.includes('webm') ? 'webm' : 'mp4'
+    return `abigail-${slug}_${stamp}_${String(index + 1).padStart(2, '0')}.${ext}`
+  }
   const ext = image.format === 'jpg' ? 'jpg' : 'png'
   const stamp = new Date(image.createdAt).toISOString().slice(0, 19).replace(/[:T]/g, '-')
   const slug = getModel(image.modelId).filenameSlug

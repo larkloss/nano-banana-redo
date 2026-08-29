@@ -10,6 +10,7 @@ import { PromptPanel } from './components/prompt/PromptPanel'
 import { RunBar } from './components/run/RunBar'
 import { Gallery } from './components/gallery/Gallery'
 import { isMockMode } from './lib/mockGemini'
+import { getModel } from './lib/models'
 import { MAX_XAI_SOURCES } from './lib/xai'
 
 function App() {
@@ -29,13 +30,21 @@ function App() {
   const { runState, images, start, stop, clearImages, isRunning } = useGenerationEngine()
   const [references, setReferences] = usePersistedReferences('generator')
 
+  // Video models are driven by one whole description, so the modular builder
+  // is bypassed entirely for them
+  const isVideoModel = getModel(settings.modelId).output === 'video'
   const effectivePrompt =
-    workspaceApi.workspace.mode === 'modular' ? workspaceApi.assembled : settings.prompt
+    !isVideoModel && workspaceApi.workspace.mode === 'modular' ? workspaceApi.assembled : settings.prompt
 
   // With references, Grok goes through the image-edit endpoint instead of
   // text-to-image, which changes what the other controls do
-  const referenceNote =
-    provider !== 'xai' || references.length === 0
+  const referenceNote = isVideoModel
+    ? references.length === 0
+      ? null
+      : 'Omni decides how to use these from your wording. Tag them to be explicit: "<FIRST_FRAME> …" for a starting ' +
+        'frame, "<FIRST_FRAME> <LAST_FRAME> …" to interpolate between two, or "<IMAGE_REF_0>" / "<IMAGE_REF_1>" to ' +
+        'reference a subject or style (numbering follows the order shown).'
+    : provider !== 'xai' || references.length === 0
       ? null
       : references.length > MAX_XAI_SOURCES
         ? `xAI accepts at most ${MAX_XAI_SOURCES} source images — only the first ${MAX_XAI_SOURCES} are sent.`
@@ -55,7 +64,7 @@ function App() {
       ? 'Set your xAI API key in the settings panel first.'
       : 'Set your Google AI Studio API key in the settings panel first.'
     : !effectivePrompt.trim()
-      ? workspaceApi.workspace.mode === 'modular'
+      ? !isVideoModel && workspaceApi.workspace.mode === 'modular'
         ? 'The assembled prompt is empty — fill in or import prompt modules first.'
         : 'Enter a prompt first.'
       : null
@@ -89,6 +98,7 @@ function App() {
           onReferencesChange={setReferences}
           referenceNote={referenceNote}
           maxReferences={provider === 'xai' ? MAX_XAI_SOURCES : 6}
+          singleBox={isVideoModel}
           disabled={isRunning}
         />
         <RunBar
@@ -96,6 +106,7 @@ function App() {
           isRunning={isRunning}
           canRun={canRun}
           runDisabledHint={runDisabledHint}
+          noun={isVideoModel ? 'video' : 'image'}
           onRun={() => void start(activeKeys, { ...settings, prompt: effectivePrompt }, references)}
           onStop={stop}
         />

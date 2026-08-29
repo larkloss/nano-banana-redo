@@ -6,11 +6,13 @@ interface Props {
   isRunning: boolean
   canRun: boolean
   runDisabledHint: string | null
+  // What the run collects — "image" for the image models, "video" for Omni
+  noun?: string
   onRun: () => void
   onStop: () => void
 }
 
-export function RunBar({ runState, isRunning, canRun, runDisabledHint, onRun, onStop }: Props) {
+export function RunBar({ runState, isRunning, canRun, runDisabledHint, noun = 'image', onRun, onStop }: Props) {
   return (
     <div className="space-y-2.5 rounded-xl border border-zinc-800 bg-zinc-900/60 p-4">
       <div className="flex items-center gap-4">
@@ -36,7 +38,7 @@ export function RunBar({ runState, isRunning, canRun, runDisabledHint, onRun, on
             </button>
           </span>
         )}
-        <StatusLine runState={runState} isRunning={isRunning} />
+        <StatusLine runState={runState} isRunning={isRunning} noun={noun} />
       </div>
       {isRunning && runState.lanes.length > 1 && (
         <div className="flex flex-wrap gap-2">
@@ -53,7 +55,7 @@ export function RunBar({ runState, isRunning, canRun, runDisabledHint, onRun, on
   )
 }
 
-function StatusLine({ runState, isRunning }: { runState: RunState; isRunning: boolean }) {
+function StatusLine({ runState, isRunning, noun }: { runState: RunState; isRunning: boolean; noun: string }) {
   if (runState.status === 'idle') {
     return (
       <span className="text-xs text-zinc-500">
@@ -94,14 +96,22 @@ function StatusLine({ runState, isRunning }: { runState: RunState; isRunning: bo
   }
 
   const banner = {
-    complete: <span className="text-emerald-400">Done — all {runState.target} images collected.</span>,
+    complete: (
+      <span className="text-emerald-400">
+        Done — all {runState.target} {noun}s collected.
+      </span>
+    ),
     'cap-reached': (
       <span className="text-amber-400">
         Attempt cap reached — collected {runState.collected}/{runState.target}. Raise "Max attempts"
         or adjust the prompt to continue.
       </span>
     ),
-    stopped: <span className="text-zinc-400">Stopped — kept {runState.collected} image(s).</span>,
+    stopped: (
+      <span className="text-zinc-400">
+        Stopped — kept {runState.collected} {noun}(s).
+      </span>
+    ),
     error: <span className="text-red-400">{runState.errorMessage ?? 'Unknown error'}</span>,
   }[runState.status as 'complete' | 'cap-reached' | 'stopped' | 'error']
 

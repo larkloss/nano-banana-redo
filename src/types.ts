@@ -12,6 +12,9 @@ export type XaiResolution = '1k' | '2k'
 // Only grok-imagine-image-2.0 accepts this; medium is the server default
 export type XaiQuality = 'low' | 'medium'
 
+// Gemini Omni video output resolution; 360p is the cheap/fast draft tier
+export type OmniResolution = '360p' | '720p' | '1080p' | '4k'
+
 export interface Settings {
   modelId: string
   systemInstruction: string
@@ -19,6 +22,7 @@ export interface Settings {
   imageSize: ImageSize
   xaiResolution: XaiResolution
   xaiQuality: XaiQuality
+  omniResolution: OmniResolution
   // Overrides the selected xAI preset's ID — lets a brand-new model be used
   // by typing its ID, without waiting for a code change. Empty = use preset.
   xaiModelId: string
@@ -63,10 +67,14 @@ export interface ReferenceImage {
 
 export interface GeneratedImage {
   id: string
+  // 'video' items come from Gemini Omni and play instead of rendering as a still
+  kind: 'image' | 'video'
   blob: Blob
   objectUrl: string
   width: number
   height: number
+  // Seconds, video only
+  duration?: number
   mimeType: string
   format: OutputFormat
   attempt: number

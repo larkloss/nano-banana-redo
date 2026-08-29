@@ -2,10 +2,11 @@ import { useCallback, useRef, useState } from 'react'
 import type { EngineEvent, GeneratedImage, LaneState, ReferenceImage, RunState, Settings } from '../types'
 import { callGenerate } from '../lib/gemini'
 import { callGenerateXai } from '../lib/xai'
+import { callGenerateOmni } from '../lib/omni'
 import { mockCallGenerate, isMockMode } from '../lib/mockGemini'
 import { runGeneration } from '../lib/retryEngine'
-import { processImagePart } from '../lib/imageUtils'
-import { getProvider } from '../lib/models'
+import { processImagePart, processVideoPart } from '../lib/imageUtils'
+import { getModel, getProvider } from '../lib/models'
 
 const IDLE_STATE: RunState = {
   status: 'idle',
@@ -41,12 +42,15 @@ export function useGenerationEngine() {
       errorMessage: null,
     })
 
+    const isVideoModel = getModel(settings.modelId).output === 'video'
+
     const onEvent = (event: EngineEvent) => {
       if (event.type === 'image') {
-        void processImagePart(event.image, settings.format, {
-          attempt: event.attempt,
-          modelId: settings.modelId,
-        }).then((img) => setImages((prev) => [img, ...prev]))
+        const meta = { attempt: event.attempt, modelId: settings.modelId }
+        const processed = isVideoModel
+          ? processVideoPart(event.image, meta)
+          : processImagePart(event.image, settings.format, meta)
+        void processed.then((img) => setImages((prev) => [img, ...prev]))
         setRunState((prev) => ({ ...prev, collected: prev.collected + 1 }))
       } else if (event.type === 'progress') {
         setRunState((prev) => ({ ...prev, attempts: event.attempts }))
@@ -76,7 +80,9 @@ export function useGenerationEngine() {
       ? mockCallGenerate
       : getProvider(settings.modelId) === 'xai'
         ? callGenerateXai
-        : callGenerate
+        : isVideoModel
+          ? callGenerateOmni
+          : callGenerate
     try {
       const summary = await runGeneration(caller, { keys, settings, references }, controller.signal, onEvent)
       setRunState((prev) => ({

@@ -25,7 +25,9 @@ export function Gallery({ images, onClear, isRunning }: Props) {
   return (
     <div className="flex-1">
       <div className="mb-3 flex items-center justify-between">
-        <span className="text-xs text-zinc-500">{images.length} image(s) this session</span>
+        <span className="text-xs text-zinc-500">
+          {images.length} {images.some((i) => i.kind === 'video') ? 'result(s)' : 'image(s)'} this session
+        </span>
         <div className="flex gap-2">
           {images.length >= 2 && (
             <button

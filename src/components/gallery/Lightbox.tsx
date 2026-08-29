@@ -30,11 +30,22 @@ export function Lightbox({ images, index, onClose, onNavigate }: Props) {
       onClick={onClose}
     >
       <div className="relative max-h-full max-w-full" onClick={(e) => e.stopPropagation()}>
-        <img
-          src={image.objectUrl}
-          alt={`Generated ${index + 1}`}
-          className="max-h-[85vh] max-w-full rounded-lg object-contain"
-        />
+        {image.kind === 'video' ? (
+          <video
+            src={image.objectUrl}
+            controls
+            autoPlay
+            loop
+            playsInline
+            className="max-h-[85vh] max-w-full rounded-lg bg-black"
+          />
+        ) : (
+          <img
+            src={image.objectUrl}
+            alt={`Generated ${index + 1}`}
+            className="max-h-[85vh] max-w-full rounded-lg object-contain"
+          />
+        )}
         <div className="absolute -top-9 right-0 flex items-center gap-3 text-xs text-zinc-300">
           <span>
             {index + 1}/{images.length} · {image.width}×{image.height}

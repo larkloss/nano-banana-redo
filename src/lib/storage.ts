@@ -23,6 +23,7 @@ export const DEFAULT_SETTINGS: Settings = {
   imageSize: '1K',
   xaiResolution: '1k',
   xaiQuality: 'medium',
+  omniResolution: '720p',
   xaiModelId: '',
   format: 'png',
   targetCount: 5,
@@ -43,6 +44,7 @@ export function normalizeSettings(raw: unknown): Settings {
   if (!['1K', '2K', '4K'].includes(parsed.imageSize)) parsed.imageSize = '1K'
   if (parsed.xaiResolution !== '2k') parsed.xaiResolution = '1k'
   if (parsed.xaiQuality !== 'low') parsed.xaiQuality = 'medium'
+  if (!['360p', '720p', '1080p', '4k'].includes(parsed.omniResolution)) parsed.omniResolution = '720p'
   if (typeof parsed.xaiModelId !== 'string') parsed.xaiModelId = ''
   if (parsed.format !== 'jpg') parsed.format = 'png'
   if (typeof parsed.systemInstruction !== 'string') parsed.systemInstruction = ''
