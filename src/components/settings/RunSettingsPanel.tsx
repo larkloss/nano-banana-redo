@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import type { Settings } from '../../types'
-import { MODELS, OMNI_RESOLUTIONS, PROVIDER_LABELS, getModel } from '../../lib/models'
+import { MODELS, OMNI_RESOLUTIONS, PROVIDER_LABELS, PROVIDER_ORDER, getModel } from '../../lib/models'
 import { listXaiModels, effectiveXaiModelId, supportsXaiQuality } from '../../lib/xai'
+import { listOpenaiModels } from '../../lib/openai'
 import { ApiKeySection } from './ApiKeySection'
 import { SyncSection } from './SyncSection'
 import { MaxAttemptsControl } from './MaxAttemptsControl'
@@ -27,10 +28,20 @@ const FORMATS = [
 const XAI_KEY_NOTE =
   "Keys are stored in this browser's localStorage and sent directly to api.x.ai. Get one from the xAI " +
   'console — a Gemini key will not work here, and vice versa. Each provider keeps its own keys.'
+const OPENAI_KEY_NOTE =
+  "Keys are stored in this browser's localStorage and sent directly to api.openai.com. Use a key from " +
+  'platform.openai.com — GPT Image models may require completing API Organization Verification in the ' +
+  'developer console first, otherwise requests are rejected. Gemini and xAI keys are kept separately.'
+
+const OPENAI_QUALITIES = ['auto', 'low', 'medium', 'high'] as const
 
 export function RunSettingsPanel({ settings, onUpdate, apiKeys, onApiKeyChange, sync, disabled }: Props) {
   const model = getModel(settings.modelId)
   const isXai = model.provider === 'xai'
+  const isOpenai = model.provider === 'openai'
+  // Non-Gemini providers get a typed-ID escape hatch and account model discovery
+  const hasOverride = model.provider !== 'gemini'
+  const [advancedOpen, setAdvancedOpen] = useState(false)
 
   return (
     <aside className="flex h-full w-80 shrink-0 flex-col gap-5 overflow-y-auto border-l border-zinc-800 bg-zinc-925 bg-zinc-900/40 p-4">
@@ -53,7 +64,7 @@ export function RunSettingsPanel({ settings, onUpdate, apiKeys, onApiKeyChange, 
           disabled={disabled}
           className="w-full rounded-md border border-zinc-700 bg-zinc-900 px-2.5 py-2 text-xs text-zinc-200 outline-none focus:border-blue-500 disabled:opacity-50"
         >
-          {(['gemini', 'xai'] as const).map((provider) => (
+          {PROVIDER_ORDER.map((provider) => (
             <optgroup key={provider} label={PROVIDER_LABELS[provider]}>
               {MODELS.filter((m) => m.provider === provider).map((m) => (
                 <option key={m.id} value={m.id}>
@@ -66,7 +77,7 @@ export function RunSettingsPanel({ settings, onUpdate, apiKeys, onApiKeyChange, 
         <p className="mt-1 text-[10px] text-zinc-600">{model.description}</p>
       </Field>
 
-      {isXai && (
+      {hasOverride && (
         <Field label="Model ID override">
           <input
             type="text"
@@ -79,10 +90,12 @@ export function RunSettingsPanel({ settings, onUpdate, apiKeys, onApiKeyChange, 
           />
           <p className="mt-1 text-[10px] text-zinc-600">
             Sent instead of the preset above when filled. Empty = use the preset.
+            {isOpenai && ' The button below lists the exact image model IDs your account can use.'}
           </p>
-          <XaiModelDiscovery
+          <ModelDiscovery
             apiKey={apiKeys.find(Boolean) ?? ''}
             disabled={disabled}
+            list={isOpenai ? listOpenaiModels : listXaiModels}
             onPick={(id) => onUpdate({ xaiModelId: id })}
           />
         </Field>
@@ -185,6 +198,70 @@ export function RunSettingsPanel({ settings, onUpdate, apiKeys, onApiKeyChange, 
         </Field>
       )}
 
+      {isOpenai && (
+        <Field label="Quality">
+          <div className="grid grid-cols-4 gap-1.5">
+            {OPENAI_QUALITIES.map((q) => (
+              <Chip
+                key={q}
+                active={settings.openaiQuality === q}
+                onClick={() => onUpdate({ openaiQuality: q })}
+                disabled={disabled}
+                wide
+              >
+                {q === 'auto' ? 'Auto' : q[0].toUpperCase() + q.slice(1)}
+              </Chip>
+            ))}
+          </div>
+          <p className="mt-1 text-[10px] text-zinc-600">
+            Auto lets the model choose. Low is the cheap draft tier; High costs the most and takes longest.
+          </p>
+        </Field>
+      )}
+
+      {isOpenai && (
+        <div>
+          <button
+            type="button"
+            onClick={() => setAdvancedOpen((o) => !o)}
+            className="text-xs font-medium text-zinc-400 hover:text-zinc-200"
+          >
+            {advancedOpen ? '▾' : '▸'} Advanced
+          </button>
+          {advancedOpen && (
+            <div className="mt-3 space-y-4 border-l border-zinc-800 pl-3">
+              <Field label="Reference fidelity">
+                <div className="grid grid-cols-2 gap-1.5">
+                  <Chip active={settings.openaiInputFidelity === 'high'} onClick={() => onUpdate({ openaiInputFidelity: 'high' })} disabled={disabled} wide>
+                    High (default)
+                  </Chip>
+                  <Chip active={settings.openaiInputFidelity === 'low'} onClick={() => onUpdate({ openaiInputFidelity: 'low' })} disabled={disabled} wide>
+                    Low
+                  </Chip>
+                </div>
+                <p className="mt-1 text-[10px] text-zinc-600">
+                  Only used when reference images are attached. High keeps faces and outfits recognizable; Low is
+                  cheaper and gives the model more freedom.
+                </p>
+              </Field>
+              <Field label="Content filter">
+                <div className="grid grid-cols-2 gap-1.5">
+                  <Chip active={settings.openaiModeration === 'auto'} onClick={() => onUpdate({ openaiModeration: 'auto' })} disabled={disabled} wide>
+                    Auto (default)
+                  </Chip>
+                  <Chip active={settings.openaiModeration === 'low'} onClick={() => onUpdate({ openaiModeration: 'low' })} disabled={disabled} wide>
+                    Low
+                  </Chip>
+                </div>
+                <p className="mt-1 text-[10px] text-zinc-600">
+                  Low is less restrictive for borderline-but-allowed prompts. Only applies to text-to-image runs.
+                </p>
+              </Field>
+            </div>
+          )}
+        </div>
+      )}
+
       {isXai && supportsXaiQuality(effectiveXaiModelId(settings)) && (
         <Field label="Quality">
           <div className="grid grid-cols-2 gap-1.5">
@@ -255,9 +332,9 @@ export function RunSettingsPanel({ settings, onUpdate, apiKeys, onApiKeyChange, 
           key={model.provider}
           apiKeys={apiKeys}
           onChange={onApiKeyChange}
-          providerName={isXai ? 'xAI API' : undefined}
-          placeholder={isXai ? 'xai-…' : undefined}
-          note={isXai ? XAI_KEY_NOTE : undefined}
+          providerName={isXai ? 'xAI API' : isOpenai ? 'OpenAI API' : undefined}
+          placeholder={isXai ? 'xai-…' : isOpenai ? 'sk-…' : undefined}
+          note={isXai ? XAI_KEY_NOTE : isOpenai ? OPENAI_KEY_NOTE : undefined}
         />
       </div>
     </aside>
@@ -266,13 +343,15 @@ export function RunSettingsPanel({ settings, onUpdate, apiKeys, onApiKeyChange, 
 
 // Lists the model IDs the key itself can use — the only reliable way to learn
 // the ID of a model released after this app was built.
-function XaiModelDiscovery({
+function ModelDiscovery({
   apiKey,
   disabled,
+  list,
   onPick,
 }: {
   apiKey: string
   disabled: boolean
+  list: (apiKey: string) => Promise<string[]>
   onPick: (id: string) => void
 }) {
   const [state, setState] = useState<
@@ -282,7 +361,7 @@ function XaiModelDiscovery({
   const fetchModels = async () => {
     setState({ status: 'loading' })
     try {
-      const ids = await listXaiModels(apiKey)
+      const ids = await list(apiKey)
       setState({ status: 'done', ids })
     } catch (err) {
       setState({ status: 'error', message: err instanceof Error ? err.message : String(err) })

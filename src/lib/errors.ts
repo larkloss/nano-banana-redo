@@ -30,7 +30,10 @@ export function classifyResponse(parsed: ParsedResponse): AttemptOutcome {
 // finish reason (xAI answers 400 with {"code":"imagine:content-moderated"}).
 // That is a per-attempt outcome, not a broken request, so it must be retried
 // like any other moderation block instead of killing the lane.
-const MODERATION_MESSAGE = /content[-_\s]?moderat|moderated|rejected by (?:content )?moderation|safety[-_\s]?(?:filter|system)/i
+// Matches xAI's imagine:content-moderated, OpenAI's moderation_blocked /
+// "rejected as a result of our safety system" / content_policy_violation.
+const MODERATION_MESSAGE =
+  /content[-_\s]?moderat|moderated|moderation[-_\s]?blocked|rejected by (?:content )?moderation|safety[-_\s]?(?:filter|system)|content[-_\s]?policy[-_\s]?violation/i
 
 export function isModerationMessage(message: string): boolean {
   return MODERATION_MESSAGE.test(message)

@@ -8,6 +8,7 @@ const SETTINGS_KEY = 'nbr.settings.v1'
 const PROVIDER_KEY_NAMES: Record<Provider, readonly [string, string, string]> = {
   gemini: ['nbr.apiKey', 'nbr.apiKey2', 'nbr.apiKey3'],
   xai: ['nbr.xaiApiKey', 'nbr.xaiApiKey2', 'nbr.xaiApiKey3'],
+  openai: ['nbr.openaiApiKey', 'nbr.openaiApiKey2', 'nbr.openaiApiKey3'],
 }
 // One-shot marker: bumps previously-persisted attempts caps to the new
 // default of 50 without resetting any other stored settings
@@ -24,6 +25,9 @@ export const DEFAULT_SETTINGS: Settings = {
   xaiResolution: '1k',
   xaiQuality: 'medium',
   omniResolution: '720p',
+  openaiQuality: 'auto',
+  openaiModeration: 'auto',
+  openaiInputFidelity: 'high',
   xaiModelId: '',
   format: 'png',
   targetCount: 5,
@@ -45,6 +49,9 @@ export function normalizeSettings(raw: unknown): Settings {
   if (parsed.xaiResolution !== '2k') parsed.xaiResolution = '1k'
   if (parsed.xaiQuality !== 'low') parsed.xaiQuality = 'medium'
   if (!['360p', '720p', '1080p', '4k'].includes(parsed.omniResolution)) parsed.omniResolution = '720p'
+  if (!['auto', 'low', 'medium', 'high'].includes(parsed.openaiQuality)) parsed.openaiQuality = 'auto'
+  if (parsed.openaiModeration !== 'low') parsed.openaiModeration = 'auto'
+  if (parsed.openaiInputFidelity !== 'low') parsed.openaiInputFidelity = 'high'
   if (typeof parsed.xaiModelId !== 'string') parsed.xaiModelId = ''
   if (parsed.format !== 'jpg') parsed.format = 'png'
   if (typeof parsed.systemInstruction !== 'string') parsed.systemInstruction = ''

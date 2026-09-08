@@ -2,6 +2,7 @@ import { useCallback, useRef, useState } from 'react'
 import type { EngineEvent, GeneratedImage, LaneState, ReferenceImage, RunState, Settings } from '../types'
 import { callGenerate } from '../lib/gemini'
 import { callGenerateXai } from '../lib/xai'
+import { callGenerateOpenai } from '../lib/openai'
 import { callGenerateOmni } from '../lib/omni'
 import { mockCallGenerate, isMockMode } from '../lib/mockGemini'
 import { runGeneration } from '../lib/retryEngine'
@@ -76,13 +77,16 @@ export function useGenerationEngine() {
       }
     }
 
+    const provider = getProvider(settings.modelId)
     const caller = isMockMode()
       ? mockCallGenerate
-      : getProvider(settings.modelId) === 'xai'
+      : provider === 'xai'
         ? callGenerateXai
-        : isVideoModel
-          ? callGenerateOmni
-          : callGenerate
+        : provider === 'openai'
+          ? callGenerateOpenai
+          : isVideoModel
+            ? callGenerateOmni
+            : callGenerate
     try {
       const summary = await runGeneration(caller, { keys, settings, references }, controller.signal, onEvent)
       setRunState((prev) => ({

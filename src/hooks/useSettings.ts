@@ -7,6 +7,7 @@ export function useSettings() {
   const [settings, setSettings] = useState<Settings>(loadSettings)
   const [geminiKeys, setGeminiKeys] = useState<ApiKeys>(() => loadApiKeys('gemini'))
   const [xaiKeys, setXaiKeys] = useState<ApiKeys>(() => loadApiKeys('xai'))
+  const [openaiKeys, setOpenaiKeys] = useState<ApiKeys>(() => loadApiKeys('openai'))
   const saveTimer = useRef<number | undefined>(undefined)
 
   useEffect(() => {
@@ -16,7 +17,9 @@ export function useSettings() {
   }, [settings])
 
   const provider = getProvider(settings.modelId)
-  const apiKeys = provider === 'xai' ? xaiKeys : geminiKeys
+  const keySets = { gemini: geminiKeys, xai: xaiKeys, openai: openaiKeys } as const
+  const keySetters = { gemini: setGeminiKeys, xai: setXaiKeys, openai: setOpenaiKeys } as const
+  const apiKeys = keySets[provider]
 
   const update = (patch: Partial<Settings>) => {
     setSettings((prev) => {
@@ -41,7 +44,7 @@ export function useSettings() {
 
   // Writes to whichever provider's key set is currently selected
   const setApiKey = (index: ApiKeyIndex, key: string) => {
-    const setter = provider === 'xai' ? setXaiKeys : setGeminiKeys
+    const setter = keySetters[provider]
     setter((prev) => {
       const next: ApiKeys = [...prev]
       next[index] = key
@@ -51,8 +54,8 @@ export function useSettings() {
   }
 
   const keysByProvider = useMemo<Record<Provider, ApiKeys>>(
-    () => ({ gemini: geminiKeys, xai: xaiKeys }),
-    [geminiKeys, xaiKeys],
+    () => ({ gemini: geminiKeys, xai: xaiKeys, openai: openaiKeys }),
+    [geminiKeys, xaiKeys, openaiKeys],
   )
 
   return { settings, update, replaceSettings, provider, apiKeys, setApiKey, keysByProvider }

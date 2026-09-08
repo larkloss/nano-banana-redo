@@ -12,6 +12,7 @@ import { Gallery } from './components/gallery/Gallery'
 import { isMockMode } from './lib/mockGemini'
 import { getModel } from './lib/models'
 import { MAX_XAI_SOURCES } from './lib/xai'
+import { MAX_OPENAI_SOURCES } from './lib/openai'
 
 function App() {
   const { settings, update, replaceSettings, provider, apiKeys, setApiKey } = useSettings()
@@ -44,9 +45,14 @@ function App() {
       : 'Omni decides how to use these from your wording. Tag them to be explicit: "<FIRST_FRAME> …" for a starting ' +
         'frame, "<FIRST_FRAME> <LAST_FRAME> …" to interpolate between two, or "<IMAGE_REF_0>" / "<IMAGE_REF_1>" to ' +
         'reference a subject or style (numbering follows the order shown).'
-    : provider !== 'xai' || references.length === 0
-      ? null
-      : references.length > MAX_XAI_SOURCES
+    : provider === 'openai'
+      ? references.length === 0
+        ? null
+        : `GPT Image edits from these ${references.length} image(s) with ${settings.openaiInputFidelity} reference ` +
+          'fidelity (Advanced). Describe what to keep from them in the prompt.'
+      : provider !== 'xai' || references.length === 0
+        ? null
+        : references.length > MAX_XAI_SOURCES
         ? `xAI accepts at most ${MAX_XAI_SOURCES} source images — only the first ${MAX_XAI_SOURCES} are sent.`
         : references.length > 1
           ? `Grok edits from these ${references.length} images, in the order shown. The first one sets the output ` +
@@ -62,7 +68,9 @@ function App() {
   const runDisabledHint = activeKeys.length === 0
     ? provider === 'xai'
       ? 'Set your xAI API key in the settings panel first.'
-      : 'Set your Google AI Studio API key in the settings panel first.'
+      : provider === 'openai'
+        ? 'Set your OpenAI API key in the settings panel first.'
+        : 'Set your Google AI Studio API key in the settings panel first.'
     : !effectivePrompt.trim()
       ? !isVideoModel && workspaceApi.workspace.mode === 'modular'
         ? 'The assembled prompt is empty — fill in or import prompt modules first.'
@@ -97,7 +105,7 @@ function App() {
           references={references}
           onReferencesChange={setReferences}
           referenceNote={referenceNote}
-          maxReferences={provider === 'xai' ? MAX_XAI_SOURCES : 6}
+          maxReferences={provider === 'xai' ? MAX_XAI_SOURCES : provider === 'openai' ? MAX_OPENAI_SOURCES : 6}
           singleBox={isVideoModel}
           disabled={isRunning}
         />

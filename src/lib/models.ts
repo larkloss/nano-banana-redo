@@ -41,6 +41,9 @@ const XAI_RATIOS = [
 ]
 
 const OMNI_RATIOS = ['16:9', '9:16']
+// GPT Image 2+ accepts arbitrary WIDTHxHEIGHT sizes (divisible by 16, between
+// 1:3 and 3:1), so the familiar ratio chips map onto concrete sizes in openai.ts
+const OPENAI_RATIOS = ['1:1', '3:2', '2:3', '4:3', '3:4', '16:9', '9:16', '21:9']
 
 export const OMNI_RESOLUTIONS = ['360p', '720p', '1080p', '4k'] as const
 
@@ -104,6 +107,48 @@ export const MODELS: ModelInfo[] = [
     filenameSlug: 'omni',
   },
   {
+    id: 'gpt-image-2.5-flare',
+    label: 'GPT Image 2.5 Flare',
+    description: 'OpenAI · fast, high-quality everyday generation · needs an OpenAI key',
+    provider: 'openai',
+    output: 'image',
+    supportsImageSize: false,
+    supportsThinking: false,
+    supportsSystemInstruction: false,
+    supportsResolution: false,
+    supportsReferences: true,
+    aspectRatios: OPENAI_RATIOS,
+    filenameSlug: 'gpt25-flare',
+  },
+  {
+    id: 'gpt-image-2.5-sunburst',
+    label: 'GPT Image 2.5 Sunburst',
+    description: 'OpenAI · best when editing precision matters (reference photos) · needs an OpenAI key',
+    provider: 'openai',
+    output: 'image',
+    supportsImageSize: false,
+    supportsThinking: false,
+    supportsSystemInstruction: false,
+    supportsResolution: false,
+    supportsReferences: true,
+    aspectRatios: OPENAI_RATIOS,
+    filenameSlug: 'gpt25-sunburst',
+  },
+  {
+    id: 'gpt-image-2',
+    label: 'GPT Image 2',
+    description: 'OpenAI · previous generation',
+    provider: 'openai',
+    output: 'image',
+    supportsImageSize: false,
+    supportsThinking: false,
+    supportsSystemInstruction: false,
+    supportsResolution: false,
+    supportsReferences: true,
+    aspectRatios: OPENAI_RATIOS,
+    filenameSlug: 'gpt2',
+  },
+  {
     id: 'grok-imagine-image-2.0',
     label: 'Grok Imagine 2.0',
     description: 'xAI Imagine 2.0 · newest · adds a low/medium quality switch',
@@ -157,5 +202,8 @@ export function getProvider(id: string): Provider {
 
 export const PROVIDER_LABELS: Record<Provider, string> = {
   gemini: 'Google Gemini',
+  openai: 'OpenAI GPT Image',
   xai: 'xAI Grok',
 }
+
+export const PROVIDER_ORDER: Provider[] = ['gemini', 'openai', 'xai']
