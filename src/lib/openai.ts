@@ -1,4 +1,4 @@
-import type { ParsedImagePart, ParsedResponse, Settings } from '../types'
+import type { OpenaiQuality, OpenaiSizeTier, ParsedImagePart, ParsedResponse, Settings } from '../types'
 import type { GenerateCaller } from './gemini'
 import { base64ToBlob } from './imageUtils'
 
@@ -13,10 +13,14 @@ const MODELS_ENDPOINT = 'https://api.openai.com/v1/models'
 // Documented ceiling for source images on the edits endpoint
 export const MAX_OPENAI_SOURCES = 16
 
-// GPT Image 2+ accepts any WIDTHxHEIGHT with both sides divisible by 16 and an
-// aspect ratio between 1:3 and 3:1, so the app's ratio chips map to concrete
-// sizes at roughly 1.3–1.7 MP (the model's standard tier).
-const RATIO_SIZES: Record<string, string> = {
+// Documented size constraints for GPT Image 2 and 2.5
+const MAX_EDGE = 3840
+const MAX_PIXELS = 8_294_400
+const MIN_PIXELS = 655_360
+
+// OpenAI's recommended sizes for the common ratios, plus fitted sizes for the
+// rest at a similar ~1.3–1.8MP budget.
+const STANDARD_SIZES: Record<string, string> = {
   '1:1': '1024x1024',
   '3:2': '1536x1024',
   '2:3': '1024x1536',
@@ -27,24 +31,55 @@ const RATIO_SIZES: Record<string, string> = {
   '21:9': '2016x864',
 }
 
-export function openaiSizeFor(aspectRatio: string): string {
-  return aspectRatio === 'auto' ? 'auto' : (RATIO_SIZES[aspectRatio] ?? 'auto')
+const TIER_BUDGET: Record<Exclude<OpenaiSizeTier, 'standard'>, number> = {
+  '2k': 2048 * 2048,
+  '4k': MAX_PIXELS, // exactly 3840x2160
 }
 
-// Same override field as xAI: a typed model ID beats the dropdown preset, so a
-// model whose exact ID isn't in the presets yet can still be used.
+// Fits a ratio into a pixel budget under the documented rules: both edges
+// multiples of 16, neither above 3840, total pixels within bounds.
+export function openaiSizeFor(aspectRatio: string, tier: OpenaiSizeTier): string {
+  if (aspectRatio === 'auto') return 'auto'
+  if (tier === 'standard') return STANDARD_SIZES[aspectRatio] ?? 'auto'
+  const [w, h] = aspectRatio.split(':').map(Number)
+  if (!w || !h) return 'auto'
+  const ratio = w / h
+  let height = Math.floor(Math.sqrt(TIER_BUDGET[tier] / ratio) / 16) * 16
+  while (height >= 16) {
+    const width = Math.round((height * ratio) / 16) * 16
+    const pixels = width * height
+    if (width <= MAX_EDGE && height <= MAX_EDGE && pixels <= MAX_PIXELS && pixels >= MIN_PIXELS) {
+      return `${width}x${height}`
+    }
+    height -= 16
+  }
+  return STANDARD_SIZES[aspectRatio] ?? 'auto'
+}
+
+// Same override field as xAI: a typed model ID beats the dropdown preset.
 export function effectiveOpenaiModelId(settings: Settings): string {
   return settings.xaiModelId.trim() || settings.modelId
 }
 
+// xhigh/max are documented for the 2.5 models only; older ones stop at high
+export function supportsExtendedQuality(modelId: string): boolean {
+  return /gpt-image-(?:2\.5|[3-9])/i.test(modelId)
+}
+
+function clampQuality(quality: OpenaiQuality, modelId: string): OpenaiQuality {
+  if ((quality === 'xhigh' || quality === 'max') && !supportsExtendedQuality(modelId)) return 'high'
+  return quality
+}
+
 export const callGenerateOpenai: GenerateCaller = async ({ apiKey, settings, references }, signal) => {
+  const modelId = effectiveOpenaiModelId(settings)
   const outputFormat = settings.format === 'jpg' ? 'jpeg' : 'png'
   const common: Record<string, string | number> = {
-    model: effectiveOpenaiModelId(settings),
+    model: modelId,
     prompt: settings.prompt,
     n: 1,
-    size: openaiSizeFor(settings.aspectRatio),
-    quality: settings.openaiQuality,
+    size: openaiSizeFor(settings.aspectRatio, settings.openaiSizeTier),
+    quality: clampQuality(settings.openaiQuality, modelId),
     output_format: outputFormat,
   }
 
@@ -61,10 +96,10 @@ export const callGenerateOpenai: GenerateCaller = async ({ apiKey, settings, ref
       signal,
     )
   } else {
+    // No input_fidelity: GPT Image 2 and later process every reference at high
+    // fidelity automatically and reject the parameter outright.
     const form = new FormData()
     for (const [key, value] of Object.entries(common)) form.append(key, String(value))
-    // High fidelity is what keeps a reference face/outfit recognizable
-    form.append('input_fidelity', settings.openaiInputFidelity)
     references.slice(0, MAX_OPENAI_SOURCES).forEach((ref, i) => {
       form.append('image[]', base64ToBlob(ref.base64, ref.mimeType), `reference-${i + 1}.${extensionFor(ref.mimeType)}`)
     })
@@ -103,7 +138,15 @@ export async function listOpenaiModels(apiKey: string, signal?: AbortSignal): Pr
 interface OpenaiImagesResponse {
   data?: { b64_json?: string; revised_prompt?: string }[]
   output_format?: 'png' | 'jpeg' | 'webp'
-  error?: { message?: string; code?: string }
+}
+
+interface OpenaiErrorBody {
+  error?: {
+    message?: string
+    type?: string
+    code?: string
+    moderation_details?: { moderation_stage?: 'input' | 'output' | 'unknown'; categories?: string[] }
+  }
 }
 
 async function send(url: string, init: RequestInit, signal: AbortSignal): Promise<Response> {
@@ -121,11 +164,36 @@ async function send(url: string, init: RequestInit, signal: AbortSignal): Promis
   }
   if (!response.ok) {
     const detail = await response.text().catch(() => '')
-    throw Object.assign(new Error(`OpenAI ${response.status}: ${truncate(detail, 300)}`), {
-      status: response.status,
-    })
+    throw toApiError(response.status, detail)
   }
   return response
+}
+
+// OpenAI distinguishes where a moderation block happened. A block on the
+// INPUT means the prompt itself is disallowed — resending the same words can
+// only fail again, so that stops the lane with an actionable message instead of
+// burning attempts. A block on the OUTPUT (the generated picture tripped the
+// filter) is random, so it stays a retryable moderation outcome like on Gemini
+// and xAI.
+function toApiError(status: number, detail: string): Error {
+  let body: OpenaiErrorBody | null = null
+  try {
+    body = JSON.parse(detail) as OpenaiErrorBody
+  } catch {
+    // not JSON — fall through to the generic form
+  }
+  const err = body?.error
+  if (err?.code === 'moderation_blocked' && err.moderation_details?.moderation_stage === 'input') {
+    const categories = err.moderation_details.categories?.length
+      ? ` (flagged: ${err.moderation_details.categories.join(', ')})`
+      : ''
+    // Worded so the retry classifier does not read it as a retryable block
+    return new Error(
+      `OpenAI refused the prompt itself${categories}. Sending the same wording again cannot succeed — ` +
+        'rephrase the prompt or change the reference images, then run again.',
+    )
+  }
+  return Object.assign(new Error(`OpenAI ${status}: ${truncate(detail, 300)}`), { status })
 }
 
 function extensionFor(mimeType: string): string {

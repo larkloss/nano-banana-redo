@@ -6,8 +6,13 @@ export type OutputFormat = 'png' | 'jpg'
 
 export type Provider = 'gemini' | 'xai' | 'openai'
 
-// OpenAI GPT Image quality tiers; auto lets the model pick
-export type OpenaiQuality = 'auto' | 'low' | 'medium' | 'high'
+// OpenAI GPT Image quality tiers; auto lets the model pick. xhigh and max
+// exist only on the GPT Image 2.5 models.
+export type OpenaiQuality = 'auto' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+
+// Pixel budget the ratio chips are fitted into. Standard uses OpenAI's
+// recommended ~1.5MP sizes; 2K and 4K are the documented larger tiers.
+export type OpenaiSizeTier = 'standard' | '2k' | '4k'
 
 // xAI's image resolution switch (distinct from Gemini's 1K/2K/4K imageSize)
 export type XaiResolution = '1k' | '2k'
@@ -27,10 +32,9 @@ export interface Settings {
   xaiQuality: XaiQuality
   omniResolution: OmniResolution
   openaiQuality: OpenaiQuality
+  openaiSizeTier: OpenaiSizeTier
   // 'low' relaxes OpenAI's content filter for borderline-but-allowed prompts
   openaiModeration: 'auto' | 'low'
-  // How closely edits preserve reference images (faces, outfits); high costs more
-  openaiInputFidelity: 'high' | 'low'
   // Overrides the selected non-Gemini preset's ID — lets a brand-new model be used
   // by typing its ID, without waiting for a code change. Empty = use preset.
   xaiModelId: string

@@ -2,7 +2,7 @@ import { useState } from 'react'
 import type { Settings } from '../../types'
 import { MODELS, OMNI_RESOLUTIONS, PROVIDER_LABELS, PROVIDER_ORDER, getModel } from '../../lib/models'
 import { listXaiModels, effectiveXaiModelId, supportsXaiQuality } from '../../lib/xai'
-import { listOpenaiModels } from '../../lib/openai'
+import { listOpenaiModels, effectiveOpenaiModelId, supportsExtendedQuality, openaiSizeFor } from '../../lib/openai'
 import { ApiKeySection } from './ApiKeySection'
 import { SyncSection } from './SyncSection'
 import { MaxAttemptsControl } from './MaxAttemptsControl'
@@ -34,6 +34,13 @@ const OPENAI_KEY_NOTE =
   'developer console first, otherwise requests are rejected. Gemini and xAI keys are kept separately.'
 
 const OPENAI_QUALITIES = ['auto', 'low', 'medium', 'high'] as const
+// Only the GPT Image 2.5 models accept these two
+const OPENAI_EXTENDED_QUALITIES = ['xhigh', 'max'] as const
+const OPENAI_SIZE_TIERS = [
+  { value: 'standard', label: 'Standard' },
+  { value: '2k', label: '2K' },
+  { value: '4k', label: '4K' },
+] as const
 
 export function RunSettingsPanel({ settings, onUpdate, apiKeys, onApiKeyChange, sync, disabled }: Props) {
   const model = getModel(settings.modelId)
@@ -199,9 +206,37 @@ export function RunSettingsPanel({ settings, onUpdate, apiKeys, onApiKeyChange, 
       )}
 
       {isOpenai && (
+        <Field label="Image size">
+          <div className="grid grid-cols-3 gap-1.5">
+            {OPENAI_SIZE_TIERS.map((t) => (
+              <Chip
+                key={t.value}
+                active={settings.openaiSizeTier === t.value}
+                onClick={() => onUpdate({ openaiSizeTier: t.value })}
+                disabled={disabled}
+                wide
+              >
+                {t.label}
+              </Chip>
+            ))}
+          </div>
+          <p className="mt-1 text-[10px] text-zinc-600">
+            {settings.aspectRatio === 'auto'
+              ? 'With Auto ratio the model also picks the size.'
+              : `Sends ${openaiSizeFor(settings.aspectRatio, settings.openaiSizeTier)} for ${settings.aspectRatio}.`}{' '}
+            {settings.openaiSizeTier !== 'standard' &&
+              'Sizes above 2560×1440 are marked experimental by OpenAI and cost more tokens.'}
+          </p>
+        </Field>
+      )}
+
+      {isOpenai && (
         <Field label="Quality">
-          <div className="grid grid-cols-4 gap-1.5">
-            {OPENAI_QUALITIES.map((q) => (
+          <div className="grid grid-cols-3 gap-1.5">
+            {[
+              ...OPENAI_QUALITIES,
+              ...(supportsExtendedQuality(effectiveOpenaiModelId(settings)) ? OPENAI_EXTENDED_QUALITIES : []),
+            ].map((q) => (
               <Chip
                 key={q}
                 active={settings.openaiQuality === q}
@@ -209,12 +244,15 @@ export function RunSettingsPanel({ settings, onUpdate, apiKeys, onApiKeyChange, 
                 disabled={disabled}
                 wide
               >
-                {q === 'auto' ? 'Auto' : q[0].toUpperCase() + q.slice(1)}
+                {q === 'auto' ? 'Auto' : q === 'xhigh' ? 'X-High' : q[0].toUpperCase() + q.slice(1)}
               </Chip>
             ))}
           </div>
           <p className="mt-1 text-[10px] text-zinc-600">
-            Auto lets the model choose. Low is the cheap draft tier; High costs the most and takes longest.
+            Auto lets the model choose. Low is the cheap draft tier.
+            {supportsExtendedQuality(effectiveOpenaiModelId(settings))
+              ? ' X-High and Max are new to GPT Image 2.5 — compare against High before paying for them.'
+              : ' This model stops at High.'}
           </p>
         </Field>
       )}
@@ -230,20 +268,6 @@ export function RunSettingsPanel({ settings, onUpdate, apiKeys, onApiKeyChange, 
           </button>
           {advancedOpen && (
             <div className="mt-3 space-y-4 border-l border-zinc-800 pl-3">
-              <Field label="Reference fidelity">
-                <div className="grid grid-cols-2 gap-1.5">
-                  <Chip active={settings.openaiInputFidelity === 'high'} onClick={() => onUpdate({ openaiInputFidelity: 'high' })} disabled={disabled} wide>
-                    High (default)
-                  </Chip>
-                  <Chip active={settings.openaiInputFidelity === 'low'} onClick={() => onUpdate({ openaiInputFidelity: 'low' })} disabled={disabled} wide>
-                    Low
-                  </Chip>
-                </div>
-                <p className="mt-1 text-[10px] text-zinc-600">
-                  Only used when reference images are attached. High keeps faces and outfits recognizable; Low is
-                  cheaper and gives the model more freedom.
-                </p>
-              </Field>
               <Field label="Content filter">
                 <div className="grid grid-cols-2 gap-1.5">
                   <Chip active={settings.openaiModeration === 'auto'} onClick={() => onUpdate({ openaiModeration: 'auto' })} disabled={disabled} wide>

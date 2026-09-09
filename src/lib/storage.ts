@@ -26,8 +26,8 @@ export const DEFAULT_SETTINGS: Settings = {
   xaiQuality: 'medium',
   omniResolution: '720p',
   openaiQuality: 'auto',
+  openaiSizeTier: 'standard',
   openaiModeration: 'auto',
-  openaiInputFidelity: 'high',
   xaiModelId: '',
   format: 'png',
   targetCount: 5,
@@ -49,9 +49,9 @@ export function normalizeSettings(raw: unknown): Settings {
   if (parsed.xaiResolution !== '2k') parsed.xaiResolution = '1k'
   if (parsed.xaiQuality !== 'low') parsed.xaiQuality = 'medium'
   if (!['360p', '720p', '1080p', '4k'].includes(parsed.omniResolution)) parsed.omniResolution = '720p'
-  if (!['auto', 'low', 'medium', 'high'].includes(parsed.openaiQuality)) parsed.openaiQuality = 'auto'
+  if (!['auto', 'low', 'medium', 'high', 'xhigh', 'max'].includes(parsed.openaiQuality)) parsed.openaiQuality = 'auto'
+  if (!['standard', '2k', '4k'].includes(parsed.openaiSizeTier)) parsed.openaiSizeTier = 'standard'
   if (parsed.openaiModeration !== 'low') parsed.openaiModeration = 'auto'
-  if (parsed.openaiInputFidelity !== 'low') parsed.openaiInputFidelity = 'high'
   if (typeof parsed.xaiModelId !== 'string') parsed.xaiModelId = ''
   if (parsed.format !== 'jpg') parsed.format = 'png'
   if (typeof parsed.systemInstruction !== 'string') parsed.systemInstruction = ''

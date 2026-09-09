@@ -48,8 +48,8 @@ function App() {
     : provider === 'openai'
       ? references.length === 0
         ? null
-        : `GPT Image edits from these ${references.length} image(s) with ${settings.openaiInputFidelity} reference ` +
-          'fidelity (Advanced). Describe what to keep from them in the prompt.'
+        : `GPT Image edits from these ${references.length} image(s) at full fidelity (the model fixes this itself). ` +
+          'Say in the prompt what to keep from them — face, outfit, pose.'
       : provider !== 'xai' || references.length === 0
         ? null
         : references.length > MAX_XAI_SOURCES
