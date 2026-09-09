@@ -46,7 +46,9 @@ export function classifyError(err: unknown): AttemptOutcome {
   const status = extractStatus(err, message)
 
   if (isModerationMessage(message)) {
-    return { kind: 'moderation', reason: truncate(extractApiMessage(message) ?? 'Blocked by content moderation', 160) }
+    // Providers that embed JSON get their own text pulled out; a caller that
+    // already wrote a readable sentence (openai.ts) is shown as-is
+    return { kind: 'moderation', reason: truncate(extractApiMessage(message) ?? message, 200) }
   }
   if (status === 429) {
     return { kind: 'transient', reason: 'Rate limited (429)', retryDelayMs: extractRetryDelayMs(message) }

@@ -84,6 +84,9 @@ export const callGenerateOpenai: GenerateCaller = async ({ apiKey, settings, ref
   }
 
   let response: Response
+  // Only text-to-image accepts the moderation parameter, so the "lower the
+  // filter" tip is only worth showing there
+  const canLowerFilter = references.length === 0 && settings.openaiModeration !== 'low'
   if (references.length === 0) {
     // moderation is a generations-only parameter
     response = await send(
@@ -94,6 +97,7 @@ export const callGenerateOpenai: GenerateCaller = async ({ apiKey, settings, ref
         body: JSON.stringify({ ...common, moderation: settings.openaiModeration }),
       },
       signal,
+      canLowerFilter,
     )
   } else {
     // No input_fidelity: GPT Image 2 and later process every reference at high
@@ -107,6 +111,7 @@ export const callGenerateOpenai: GenerateCaller = async ({ apiKey, settings, ref
       EDIT_ENDPOINT,
       { method: 'POST', headers: { Authorization: `Bearer ${apiKey}` }, body: form },
       signal,
+      canLowerFilter,
     )
   }
 
@@ -149,7 +154,7 @@ interface OpenaiErrorBody {
   }
 }
 
-async function send(url: string, init: RequestInit, signal: AbortSignal): Promise<Response> {
+async function send(url: string, init: RequestInit, signal: AbortSignal, canLowerFilter = false): Promise<Response> {
   let response: Response
   try {
     response = await fetch(url, { ...init, signal })
@@ -164,18 +169,18 @@ async function send(url: string, init: RequestInit, signal: AbortSignal): Promis
   }
   if (!response.ok) {
     const detail = await response.text().catch(() => '')
-    throw toApiError(response.status, detail)
+    throw toApiError(response.status, detail, canLowerFilter)
   }
   return response
 }
 
-// OpenAI distinguishes where a moderation block happened. A block on the
-// INPUT means the prompt itself is disallowed — resending the same words can
-// only fail again, so that stops the lane with an actionable message instead of
-// burning attempts. A block on the OUTPUT (the generated picture tripped the
-// filter) is random, so it stays a retryable moderation outcome like on Gemini
-// and xAI.
-function toApiError(status: number, detail: string): Error {
+// Every moderation block is a retryable attempt — the same policy as Gemini
+// and xAI, and what the user asked for. OpenAI's docs suggest an input-stage
+// block will repeat for identical input, but in practice the vague "other"
+// category trips on harmless character art and does clear on retry, and the
+// attempts cap bounds the cost. The message says which stage and category so
+// a genuinely stuck run is easy to recognise.
+function toApiError(status: number, detail: string, canLowerFilter: boolean): Error {
   let body: OpenaiErrorBody | null = null
   try {
     body = JSON.parse(detail) as OpenaiErrorBody
@@ -183,15 +188,21 @@ function toApiError(status: number, detail: string): Error {
     // not JSON — fall through to the generic form
   }
   const err = body?.error
-  if (err?.code === 'moderation_blocked' && err.moderation_details?.moderation_stage === 'input') {
-    const categories = err.moderation_details.categories?.length
-      ? ` (flagged: ${err.moderation_details.categories.join(', ')})`
+  if (err?.code === 'moderation_blocked') {
+    const stage = err.moderation_details?.moderation_stage
+    const categories = err.moderation_details?.categories?.length
+      ? `, flagged: ${err.moderation_details.categories.join(', ')}`
       : ''
-    // Worded so the retry classifier does not read it as a retryable block
-    return new Error(
-      `OpenAI refused the prompt itself${categories}. Sending the same wording again cannot succeed — ` +
-        'rephrase the prompt or change the reference images, then run again.',
-    )
+    const where = stage === 'input' ? 'the prompt/reference images' : stage === 'output' ? 'the generated image' : 'the request'
+    const tip = canLowerFilter
+      ? ' Tip: Advanced → Content filter → Low.'
+      : stage === 'input'
+        ? ' If every attempt fails the same way, rephrase or swap a reference image.'
+        : ''
+    // Contains "content moderation" so the retry classifier keeps the lane alive
+    return Object.assign(new Error(`Content moderation blocked ${where} (${stage ?? 'unknown'} stage${categories}).${tip}`), {
+      status,
+    })
   }
   return Object.assign(new Error(`OpenAI ${status}: ${truncate(detail, 300)}`), { status })
 }
