@@ -9,22 +9,42 @@ export function base64ToBlob(base64: string, mimeType: string): Blob {
   return new Blob([bytes], { type: mimeType })
 }
 
+// The format a blob REALLY is, read from its magic bytes. Providers' declared
+// mime types are not trustworthy here — Gemini has been seen labelling JPEG
+// bytes as image/png — and a wrong label used to skip the re-encode, leaving
+// a .png file that was actually a JPEG.
+export async function sniffImageMimeType(blob: Blob, fallback: string): Promise<string> {
+  const head = new Uint8Array(await blob.slice(0, 12).arrayBuffer())
+  if (head[0] === 0x89 && head[1] === 0x50 && head[2] === 0x4e && head[3] === 0x47) return 'image/png'
+  if (head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff) return 'image/jpeg'
+  if (head[0] === 0x52 && head[1] === 0x49 && head[2] === 0x46 && head[3] === 0x46 && head[8] === 0x57 && head[9] === 0x45) {
+    return 'image/webp'
+  }
+  if (head[0] === 0x47 && head[1] === 0x49 && head[2] === 0x46) return 'image/gif'
+  return fallback
+}
+
 export async function processImagePart(
   part: ParsedImagePart,
   format: OutputFormat,
   meta: { attempt: number; modelId: string },
 ): Promise<GeneratedImage> {
   const raw = base64ToBlob(part.base64, part.mimeType)
+  // Decide on the real bytes, not the label the API attached to them
+  const actual = await sniffImageMimeType(raw, part.mimeType)
   const bitmap = await createImageBitmap(raw)
   let blob = raw
-  let mimeType = part.mimeType
-  if (format === 'jpg' && part.mimeType !== 'image/jpeg') {
+  let mimeType = actual
+  if (format === 'jpg' && actual !== 'image/jpeg') {
     blob = await toJpeg(bitmap)
     mimeType = 'image/jpeg'
-  } else if (format === 'png' && part.mimeType !== 'image/png') {
-    // xAI returns JPEG — re-encode so a .png filename holds real PNG bytes
+  } else if (format === 'png' && actual !== 'image/png') {
     blob = await toPng(bitmap)
     mimeType = 'image/png'
+  } else if (blob.type !== actual) {
+    // Right format already, just mislabelled — fix the blob's type so the
+    // browser's download and preview treat it correctly
+    blob = new Blob([raw], { type: actual })
   }
   const image: GeneratedImage = {
     id: crypto.randomUUID(),
