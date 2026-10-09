@@ -10,6 +10,10 @@ export interface ModelInfo {
   output: 'image' | 'video'
   supportsImageSize: boolean
   supportsThinking: boolean
+  // Google Search / Image Search grounding tools (Nano Banana 2.1)
+  supportsGrounding: boolean
+  // Reference images the model accepts in one request
+  maxReferences: number
   supportsSystemInstruction: boolean
   // xAI exposes a 1k/2k resolution switch instead of Gemini's 1K/2K/4K sizes
   supportsResolution: boolean
@@ -49,6 +53,22 @@ export const OMNI_RESOLUTIONS = ['360p', '720p', '1080p', '4k'] as const
 
 export const MODELS: ModelInfo[] = [
   {
+    id: 'gemini-nano-banana-2.1',
+    label: 'Nano Banana 2.1',
+    description: 'Newest Flash-tier image model · up to 4K · 14 references · high thinking · search grounding',
+    provider: 'gemini',
+    output: 'image',
+    supportsImageSize: true,
+    supportsThinking: true,
+    supportsGrounding: true,
+    maxReferences: 14,
+    supportsSystemInstruction: true,
+    supportsResolution: false,
+    supportsReferences: true,
+    aspectRatios: EXTENDED_RATIOS,
+    filenameSlug: 'nano-banana-2-1',
+  },
+  {
     id: 'gemini-3.1-flash-image',
     label: 'Nano Banana 2',
     description: 'Gemini 3.1 Flash Image · fast, up to 4K · high thinking',
@@ -56,6 +76,8 @@ export const MODELS: ModelInfo[] = [
     output: 'image',
     supportsImageSize: true,
     supportsThinking: true,
+    supportsGrounding: false,
+    maxReferences: 6,
     supportsSystemInstruction: true,
     supportsResolution: false,
     supportsReferences: true,
@@ -70,6 +92,8 @@ export const MODELS: ModelInfo[] = [
     output: 'image',
     supportsImageSize: true,
     supportsThinking: false,
+    supportsGrounding: false,
+    maxReferences: 6,
     supportsSystemInstruction: true,
     supportsResolution: false,
     supportsReferences: true,
@@ -84,6 +108,8 @@ export const MODELS: ModelInfo[] = [
     output: 'image',
     supportsImageSize: false,
     supportsThinking: false,
+    supportsGrounding: false,
+    maxReferences: 6,
     supportsSystemInstruction: true,
     supportsResolution: false,
     supportsReferences: true,
@@ -98,6 +124,8 @@ export const MODELS: ModelInfo[] = [
     output: 'video',
     supportsImageSize: false,
     supportsThinking: false,
+    supportsGrounding: false,
+    maxReferences: 6,
     // Omni rejects system instructions, temperature and negative prompts —
     // negatives go in the prompt itself ("no dialogue", "no scene cuts")
     supportsSystemInstruction: false,
@@ -114,6 +142,8 @@ export const MODELS: ModelInfo[] = [
     output: 'image',
     supportsImageSize: false,
     supportsThinking: false,
+    supportsGrounding: false,
+    maxReferences: 6,
     supportsSystemInstruction: false,
     supportsResolution: false,
     supportsReferences: true,
@@ -128,6 +158,8 @@ export const MODELS: ModelInfo[] = [
     output: 'image',
     supportsImageSize: false,
     supportsThinking: false,
+    supportsGrounding: false,
+    maxReferences: 6,
     supportsSystemInstruction: false,
     supportsResolution: false,
     supportsReferences: true,
@@ -142,6 +174,8 @@ export const MODELS: ModelInfo[] = [
     output: 'image',
     supportsImageSize: false,
     supportsThinking: false,
+    supportsGrounding: false,
+    maxReferences: 6,
     supportsSystemInstruction: false,
     supportsResolution: false,
     supportsReferences: true,
@@ -156,6 +190,8 @@ export const MODELS: ModelInfo[] = [
     output: 'image',
     supportsImageSize: false,
     supportsThinking: false,
+    supportsGrounding: false,
+    maxReferences: 6,
     supportsSystemInstruction: false,
     supportsResolution: true,
     supportsReferences: true,
@@ -170,6 +206,8 @@ export const MODELS: ModelInfo[] = [
     output: 'image',
     supportsImageSize: false,
     supportsThinking: false,
+    supportsGrounding: false,
+    maxReferences: 6,
     supportsSystemInstruction: false,
     supportsResolution: true,
     supportsReferences: true,
@@ -184,6 +222,8 @@ export const MODELS: ModelInfo[] = [
     output: 'image',
     supportsImageSize: false,
     supportsThinking: false,
+    supportsGrounding: false,
+    maxReferences: 6,
     supportsSystemInstruction: false,
     supportsResolution: true,
     supportsReferences: true,

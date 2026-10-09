@@ -42,6 +42,19 @@ export const callGenerate: GenerateCaller = async ({ apiKey, settings, reference
   // to models that don't support it (Pro, 2.5) would error, so it's gated.
   const thinkingConfig = model.supportsThinking ? { thinkingLevel: ThinkingLevel.HIGH } : null
 
+  // Grounding (Nano Banana 2.1): Web Search feeds the model text results about
+  // the prompt; Image Search additionally returns image bytes it can draw from.
+  // Both ride on the googleSearch tool — image search is a searchTypes flag on
+  // it. Only sent for models that support it, since others reject tools.
+  const tools =
+    model.supportsGrounding && (settings.groundWebSearch || settings.groundImageSearch)
+      ? [
+          {
+            googleSearch: settings.groundImageSearch ? { searchTypes: { imageSearch: {} } } : {},
+          },
+        ]
+      : null
+
   const doCall = (sys: string | null, callParts: Part[]) =>
     ai.models.generateContent({
       model: settings.modelId,
@@ -51,6 +64,7 @@ export const callGenerate: GenerateCaller = async ({ apiKey, settings, reference
         ...(sys ? { systemInstruction: sys } : {}),
         ...(Object.keys(imageConfig).length > 0 ? { imageConfig } : {}),
         ...(thinkingConfig ? { thinkingConfig } : {}),
+        ...(tools ? { tools } : {}),
         abortSignal: signal,
       },
     })

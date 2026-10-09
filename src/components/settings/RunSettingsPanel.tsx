@@ -125,6 +125,34 @@ export function RunSettingsPanel({ settings, onUpdate, apiKeys, onApiKeyChange, 
         </Field>
       )}
 
+      {model.supportsGrounding && (
+        <Field label="Grounding (Google Search)">
+          <div className="grid grid-cols-2 gap-1.5">
+            <Chip
+              active={settings.groundWebSearch}
+              onClick={() => onUpdate({ groundWebSearch: !settings.groundWebSearch })}
+              disabled={disabled}
+              wide
+            >
+              Web search {settings.groundWebSearch ? 'on' : 'off'}
+            </Chip>
+            <Chip
+              active={settings.groundImageSearch}
+              onClick={() => onUpdate({ groundImageSearch: !settings.groundImageSearch })}
+              disabled={disabled}
+              wide
+            >
+              Image search {settings.groundImageSearch ? 'on' : 'off'}
+            </Chip>
+          </div>
+          <p className="mt-1 text-[10px] text-zinc-600">
+            Lets the model look things up before drawing. Web search pulls in text facts about what you
+            describe (real places, products, events); Image search also fetches reference pictures from the web
+            for likeness and detail. Both off = the model works from the prompt alone. Adds latency and cost.
+          </p>
+        </Field>
+      )}
+
       <Field label="Aspect ratio">
         <div className="flex flex-wrap gap-1.5">
           <Chip

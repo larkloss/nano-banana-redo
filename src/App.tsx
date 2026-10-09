@@ -105,7 +105,7 @@ function App() {
           references={references}
           onReferencesChange={setReferences}
           referenceNote={referenceNote}
-          maxReferences={provider === 'xai' ? MAX_XAI_SOURCES : provider === 'openai' ? MAX_OPENAI_SOURCES : 6}
+          maxReferences={provider === 'xai' ? MAX_XAI_SOURCES : provider === 'openai' ? MAX_OPENAI_SOURCES : getModel(settings.modelId).maxReferences}
           singleBox={isVideoModel}
           disabled={isRunning}
         />

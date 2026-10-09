@@ -35,6 +35,9 @@ export interface Settings {
   openaiSizeTier: OpenaiSizeTier
   // 'low' relaxes OpenAI's content filter for borderline-but-allowed prompts
   openaiModeration: 'auto' | 'low'
+  // Nano Banana 2.1 grounding tools — opt-in, both off by default
+  groundWebSearch: boolean
+  groundImageSearch: boolean
   // Overrides the selected non-Gemini preset's ID — lets a brand-new model be used
   // by typing its ID, without waiting for a code change. Empty = use preset.
   xaiModelId: string

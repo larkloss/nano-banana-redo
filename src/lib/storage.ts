@@ -28,6 +28,8 @@ export const DEFAULT_SETTINGS: Settings = {
   openaiQuality: 'auto',
   openaiSizeTier: 'standard',
   openaiModeration: 'auto',
+  groundWebSearch: false,
+  groundImageSearch: false,
   xaiModelId: '',
   format: 'png',
   targetCount: 5,
@@ -52,6 +54,8 @@ export function normalizeSettings(raw: unknown): Settings {
   if (!['auto', 'low', 'medium', 'high', 'xhigh', 'max'].includes(parsed.openaiQuality)) parsed.openaiQuality = 'auto'
   if (!['standard', '2k', '4k'].includes(parsed.openaiSizeTier)) parsed.openaiSizeTier = 'standard'
   if (parsed.openaiModeration !== 'low') parsed.openaiModeration = 'auto'
+  parsed.groundWebSearch = parsed.groundWebSearch === true
+  parsed.groundImageSearch = parsed.groundImageSearch === true
   if (typeof parsed.xaiModelId !== 'string') parsed.xaiModelId = ''
   if (parsed.format !== 'jpg') parsed.format = 'png'
   if (typeof parsed.systemInstruction !== 'string') parsed.systemInstruction = ''
