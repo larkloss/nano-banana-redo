@@ -4,11 +4,43 @@ export type ImageSize = '1K' | '2K' | '4K'
 
 export type OutputFormat = 'png' | 'jpg'
 
+export type Provider = 'gemini' | 'xai' | 'openai'
+
+// OpenAI GPT Image quality tiers; auto lets the model pick. xhigh and max
+// exist only on the GPT Image 2.5 models.
+export type OpenaiQuality = 'auto' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+
+// Pixel budget the ratio chips are fitted into. Standard uses OpenAI's
+// recommended ~1.5MP sizes; 2K and 4K are the documented larger tiers.
+export type OpenaiSizeTier = 'standard' | '2k' | '4k'
+
+// xAI's image resolution switch (distinct from Gemini's 1K/2K/4K imageSize)
+export type XaiResolution = '1k' | '2k'
+
+// Only grok-imagine-image-2.0 accepts this; medium is the server default
+export type XaiQuality = 'low' | 'medium'
+
+// Gemini Omni video output resolution; 360p is the cheap/fast draft tier
+export type OmniResolution = '360p' | '720p' | '1080p' | '4k'
+
 export interface Settings {
   modelId: string
   systemInstruction: string
   aspectRatio: AspectRatio
   imageSize: ImageSize
+  xaiResolution: XaiResolution
+  xaiQuality: XaiQuality
+  omniResolution: OmniResolution
+  openaiQuality: OpenaiQuality
+  openaiSizeTier: OpenaiSizeTier
+  // 'low' relaxes OpenAI's content filter for borderline-but-allowed prompts
+  openaiModeration: 'auto' | 'low'
+  // Nano Banana 2.1 grounding tools — opt-in, both off by default
+  groundWebSearch: boolean
+  groundImageSearch: boolean
+  // Overrides the selected non-Gemini preset's ID — lets a brand-new model be used
+  // by typing its ID, without waiting for a code change. Empty = use preset.
+  xaiModelId: string
   format: OutputFormat
   targetCount: number
   attemptsCap: number
@@ -50,15 +82,21 @@ export interface ReferenceImage {
 
 export interface GeneratedImage {
   id: string
+  // 'video' items come from Gemini Omni and play instead of rendering as a still
+  kind: 'image' | 'video'
   blob: Blob
   objectUrl: string
   width: number
   height: number
+  // Seconds, video only
+  duration?: number
   mimeType: string
   format: OutputFormat
   attempt: number
   modelId: string
   createdAt: number
+  // Set on results of the edit studio: which edit chain and version they are
+  edit?: { sessionId: string; version: number; prompt: string }
 }
 
 export type RunStatus =

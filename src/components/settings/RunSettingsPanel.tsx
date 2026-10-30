@@ -1,151 +1,499 @@
+import { useState } from 'react'
 import type { Settings } from '../../types'
-import { MODELS, getModel } from '../../lib/models'
+import { MODELS, OMNI_RESOLUTIONS, PROVIDER_LABELS, PROVIDER_ORDER, getModel } from '../../lib/models'
+import { listXaiModels, effectiveXaiModelId, supportsXaiQuality } from '../../lib/xai'
+import { listOpenaiModels, effectiveOpenaiModelId, supportsExtendedQuality, openaiSizeFor } from '../../lib/openai'
 import { ApiKeySection } from './ApiKeySection'
+import { SyncSection } from './SyncSection'
 import { MaxAttemptsControl } from './MaxAttemptsControl'
+import type { usePromptFileSync } from '../../hooks/usePromptFileSync'
+import { ExpandableTextarea } from '../common/ExpandableTextarea'
 
 interface Props {
   settings: Settings
   onUpdate: (patch: Partial<Settings>) => void
   apiKeys: [string, string, string]
   onApiKeyChange: (index: 0 | 1 | 2, key: string) => void
+  sync: ReturnType<typeof usePromptFileSync>
   disabled: boolean
 }
 
 const SIZES = ['1K', '2K', '4K'] as const
+const XAI_RESOLUTIONS = ['1k', '2k'] as const
 const FORMATS = [
   { value: 'png', label: 'PNG' },
   { value: 'jpg', label: 'JPG' },
 ] as const
 
-export function RunSettingsPanel({ settings, onUpdate, apiKeys, onApiKeyChange, disabled }: Props) {
+const XAI_KEY_NOTE =
+  "Keys are stored in this browser's localStorage and sent directly to api.x.ai. Get one from the xAI " +
+  'console — a Gemini key will not work here, and vice versa. Each provider keeps its own keys.'
+const OPENAI_KEY_NOTE =
+  "Keys are stored in this browser's localStorage and sent directly to api.openai.com. Use a key from " +
+  'platform.openai.com — GPT Image models may require completing API Organization Verification in the ' +
+  'developer console first, otherwise requests are rejected. Gemini and xAI keys are kept separately.'
+
+const OPENAI_QUALITIES = ['auto', 'low', 'medium', 'high'] as const
+// Only the GPT Image 2.5 models accept these two
+const OPENAI_EXTENDED_QUALITIES = ['xhigh', 'max'] as const
+const OPENAI_SIZE_TIERS = [
+  { value: 'standard', label: 'Standard' },
+  { value: '2k', label: '2K' },
+  { value: '4k', label: '4K' },
+] as const
+
+export function RunSettingsPanel({ settings, onUpdate, apiKeys, onApiKeyChange, sync, disabled }: Props) {
   const model = getModel(settings.modelId)
+  const isXai = model.provider === 'xai'
+  const isOpenai = model.provider === 'openai'
+  // Non-Gemini providers get a typed-ID escape hatch and account model discovery
+  const hasOverride = model.provider !== 'gemini'
+  const [advancedOpen, setAdvancedOpen] = useState(false)
 
   return (
-    <aside className="flex h-full w-80 shrink-0 flex-col gap-5 overflow-y-auto border-l border-zinc-800 bg-zinc-925 bg-zinc-900/40 p-4">
-      <h2 className="text-sm font-semibold text-zinc-300">Run settings</h2>
+    <aside className="flex h-full w-[22rem] shrink-0 flex-col gap-3 overflow-y-auto border-l border-zinc-800 bg-zinc-950 p-4">
+      <h2 className="px-1 text-sm font-semibold text-zinc-200">Settings</h2>
 
-      <Field label="Model">
-        <select
-          value={settings.modelId}
-          onChange={(e) => onUpdate({ modelId: e.target.value })}
+      <Section icon="💾" title="Save to a file">
+        <SyncSection
+          status={sync.status}
+          onConnectNew={() => void sync.connectNew()}
+          onConnectExisting={() => void sync.connectExisting()}
+          onGrantPermission={() => void sync.grantPermission()}
+          onDisconnect={() => void sync.disconnect()}
+          onPull={() => void sync.pullNow()}
           disabled={disabled}
-          className="w-full rounded-md border border-zinc-700 bg-zinc-900 px-2.5 py-2 text-xs text-zinc-200 outline-none focus:border-blue-500 disabled:opacity-50"
-        >
-          {MODELS.map((m) => (
-            <option key={m.id} value={m.id}>
-              {m.label} · {m.id}
-            </option>
-          ))}
-        </select>
-        <p className="mt-1 text-[10px] text-zinc-600">{model.description}</p>
-      </Field>
-
-      <Field label="System instructions">
-        <textarea
-          value={settings.systemInstruction}
-          onChange={(e) => onUpdate({ systemInstruction: e.target.value })}
-          disabled={disabled}
-          placeholder="Optional tone and style instructions for the model…"
-          rows={4}
-          spellCheck={false}
-          className="w-full resize-y rounded-md border border-zinc-700 bg-zinc-900 px-2.5 py-2 text-xs leading-relaxed text-zinc-200 placeholder-zinc-600 outline-none focus:border-blue-500 disabled:opacity-50"
         />
-        <p className="mt-1 text-[10px] text-zinc-600">
-          Sent with every attempt, separate from the prompt. Leave empty to send none.
-        </p>
-      </Field>
+      </Section>
 
-      <Field label="Aspect ratio">
-        <div className="flex flex-wrap gap-1.5">
-          <Chip
-            active={settings.aspectRatio === 'auto'}
-            onClick={() => onUpdate({ aspectRatio: 'auto' })}
+      <Section icon="🎨" title="Model">
+        <Field label="Model">
+          <select
+            value={settings.modelId}
+            onChange={(e) => onUpdate({ modelId: e.target.value })}
             disabled={disabled}
+            className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-2.5 py-2 text-xs text-zinc-200 outline-none focus:border-blue-500 disabled:opacity-50"
           >
-            Auto
-          </Chip>
-          {model.aspectRatios.map((r) => (
-            <Chip
-              key={r}
-              active={settings.aspectRatio === r}
-              onClick={() => onUpdate({ aspectRatio: r })}
-              disabled={disabled}
-            >
-              {r}
-            </Chip>
-          ))}
-        </div>
-      </Field>
+            {PROVIDER_ORDER.map((provider) => (
+              <optgroup key={provider} label={PROVIDER_LABELS[provider]}>
+                {MODELS.filter((m) => m.provider === provider).map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.label} · {m.id}
+                  </option>
+                ))}
+              </optgroup>
+            ))}
+          </select>
+          <p className="mt-1 text-[10px] text-zinc-600">{model.description}</p>
+        </Field>
 
-      {model.supportsImageSize && (
-        <Field label="Image size">
-          <div className="grid grid-cols-3 gap-1.5">
-            {SIZES.map((s) => (
+        {hasOverride && (
+          <Field label="Model ID override">
+            <input
+              type="text"
+              value={settings.xaiModelId}
+              onChange={(e) => onUpdate({ xaiModelId: e.target.value })}
+              disabled={disabled}
+              placeholder={model.id}
+              spellCheck={false}
+              className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-2.5 py-1.5 text-xs text-zinc-200 placeholder-zinc-600 outline-none focus:border-blue-500 disabled:opacity-50"
+            />
+            <p className="mt-1 text-[10px] text-zinc-600">
+              Sent instead of the preset above when filled. Empty = use the preset.
+              {isOpenai && ' The button below lists the exact image model IDs your account can use.'}
+            </p>
+            <ModelDiscovery
+              apiKey={apiKeys.find(Boolean) ?? ''}
+              disabled={disabled}
+              list={isOpenai ? listOpenaiModels : listXaiModels}
+              onPick={(id) => onUpdate({ xaiModelId: id })}
+            />
+          </Field>
+        )}
+
+        {model.supportsSystemInstruction && (
+          <Field label="System instructions">
+            <ExpandableTextarea
+              value={settings.systemInstruction}
+              onChange={(systemInstruction) => onUpdate({ systemInstruction })}
+              label="System instructions"
+              disabled={disabled}
+              placeholder="Optional tone and style instructions for the model…"
+              rows={4}
+              className="w-full resize-y rounded-lg border border-zinc-700 bg-zinc-950 px-2.5 py-2 text-xs leading-relaxed text-zinc-200 placeholder-zinc-600 outline-none focus:border-blue-500 disabled:opacity-50"
+            />
+            <p className="mt-1 text-[10px] text-zinc-600">
+              Sent with every attempt, separate from the prompt. Leave empty to send none.
+            </p>
+          </Field>
+        )}
+
+        {model.supportsGrounding && (
+          <Field label="Grounding (Google Search)">
+            <div className="grid grid-cols-2 gap-1.5">
               <Chip
-                key={s}
-                active={settings.imageSize === s}
-                onClick={() => onUpdate({ imageSize: s })}
+                active={settings.groundWebSearch}
+                onClick={() => onUpdate({ groundWebSearch: !settings.groundWebSearch })}
                 disabled={disabled}
                 wide
               >
-                {s}
+                Web search {settings.groundWebSearch ? 'on' : 'off'}
+              </Chip>
+              <Chip
+                active={settings.groundImageSearch}
+                onClick={() => onUpdate({ groundImageSearch: !settings.groundImageSearch })}
+                disabled={disabled}
+                wide
+              >
+                Image search {settings.groundImageSearch ? 'on' : 'off'}
+              </Chip>
+            </div>
+            <p className="mt-1 text-[10px] text-zinc-600">
+              Lets the model look things up before drawing. Web search pulls in text facts about what you describe (real
+              places, products, events); Image search also fetches reference pictures from the web for likeness and
+              detail. Both off = the model works from the prompt alone. Adds latency and cost.
+            </p>
+          </Field>
+        )}
+      </Section>
+
+      <Section icon="🖼️" title={model.output === 'video' ? 'Video' : 'Picture'}>
+        <Field label="Aspect ratio">
+          <div className="flex flex-wrap gap-1.5">
+            <Chip
+              active={settings.aspectRatio === 'auto'}
+              onClick={() => onUpdate({ aspectRatio: 'auto' })}
+              disabled={disabled}
+            >
+              Auto
+            </Chip>
+            {model.aspectRatios.map((r) => (
+              <Chip
+                key={r}
+                active={settings.aspectRatio === r}
+                onClick={() => onUpdate({ aspectRatio: r })}
+                disabled={disabled}
+              >
+                {r}
               </Chip>
             ))}
           </div>
         </Field>
-      )}
 
-      <Field label="Output format">
-        <div className="grid grid-cols-2 gap-1.5">
-          {FORMATS.map((f) => (
-            <Chip
-              key={f.value}
-              active={settings.format === f.value}
-              onClick={() => onUpdate({ format: f.value })}
-              disabled={disabled}
-              wide
+        {model.supportsImageSize && (
+          <Field label="Image size">
+            <div className="grid grid-cols-3 gap-1.5">
+              {SIZES.map((s) => (
+                <Chip
+                  key={s}
+                  active={settings.imageSize === s}
+                  onClick={() => onUpdate({ imageSize: s })}
+                  disabled={disabled}
+                  wide
+                >
+                  {s}
+                </Chip>
+              ))}
+            </div>
+          </Field>
+        )}
+
+        {model.output === 'video' && (
+          <Field label="Video resolution">
+            <div className="grid grid-cols-4 gap-1.5">
+              {OMNI_RESOLUTIONS.map((r) => (
+                <Chip
+                  key={r}
+                  active={settings.omniResolution === r}
+                  onClick={() => onUpdate({ omniResolution: r })}
+                  disabled={disabled}
+                  wide
+                >
+                  {r}
+                </Chip>
+              ))}
+            </div>
+            <p className="mt-1 text-[10px] text-zinc-600">
+              360p is the draft tier — roughly a third of the cost and much faster, good for testing a prompt before
+              committing. 1080p and 4K are upscaled and come back as a download link instead of inline data.
+            </p>
+          </Field>
+        )}
+
+        {model.supportsResolution && (
+          <Field label="Resolution">
+            <div className="grid grid-cols-2 gap-1.5">
+              {XAI_RESOLUTIONS.map((r) => (
+                <Chip
+                  key={r}
+                  active={settings.xaiResolution === r}
+                  onClick={() => onUpdate({ xaiResolution: r })}
+                  disabled={disabled}
+                  wide
+                >
+                  {r.toUpperCase()}
+                </Chip>
+              ))}
+            </div>
+          </Field>
+        )}
+
+        {isOpenai && (
+          <Field label="Image size">
+            <div className="grid grid-cols-3 gap-1.5">
+              {OPENAI_SIZE_TIERS.map((t) => (
+                <Chip
+                  key={t.value}
+                  active={settings.openaiSizeTier === t.value}
+                  onClick={() => onUpdate({ openaiSizeTier: t.value })}
+                  disabled={disabled}
+                  wide
+                >
+                  {t.label}
+                </Chip>
+              ))}
+            </div>
+            <p className="mt-1 text-[10px] text-zinc-600">
+              {settings.aspectRatio === 'auto'
+                ? 'With Auto ratio the model also picks the size.'
+                : `Sends ${openaiSizeFor(settings.aspectRatio, settings.openaiSizeTier)} for ${settings.aspectRatio}.`}{' '}
+              {settings.openaiSizeTier !== 'standard' &&
+                'Sizes above 2560×1440 are marked experimental by OpenAI and cost more tokens.'}
+            </p>
+          </Field>
+        )}
+
+        {isOpenai && (
+          <Field label="Quality">
+            <div className="grid grid-cols-3 gap-1.5">
+              {[
+                ...OPENAI_QUALITIES,
+                ...(supportsExtendedQuality(effectiveOpenaiModelId(settings)) ? OPENAI_EXTENDED_QUALITIES : []),
+              ].map((q) => (
+                <Chip
+                  key={q}
+                  active={settings.openaiQuality === q}
+                  onClick={() => onUpdate({ openaiQuality: q })}
+                  disabled={disabled}
+                  wide
+                >
+                  {q === 'auto' ? 'Auto' : q === 'xhigh' ? 'X-High' : q[0].toUpperCase() + q.slice(1)}
+                </Chip>
+              ))}
+            </div>
+            <p className="mt-1 text-[10px] text-zinc-600">
+              Auto lets the model choose. Low is the cheap draft tier.
+              {supportsExtendedQuality(effectiveOpenaiModelId(settings))
+                ? ' X-High and Max are new to GPT Image 2.5 — compare against High before paying for them.'
+                : ' This model stops at High.'}
+            </p>
+          </Field>
+        )}
+
+        {isOpenai && (
+          <div>
+            <button
+              type="button"
+              onClick={() => setAdvancedOpen((o) => !o)}
+              className="text-xs font-medium text-zinc-400 hover:text-zinc-200"
             >
-              {f.label}
-            </Chip>
-          ))}
-        </div>
-      </Field>
+              {advancedOpen ? '▾' : '▸'} Advanced
+            </button>
+            {advancedOpen && (
+              <div className="mt-3 space-y-4 border-l border-zinc-800 pl-3">
+                <Field label="Content filter">
+                  <div className="grid grid-cols-2 gap-1.5">
+                    <Chip
+                      active={settings.openaiModeration === 'auto'}
+                      onClick={() => onUpdate({ openaiModeration: 'auto' })}
+                      disabled={disabled}
+                      wide
+                    >
+                      Auto (default)
+                    </Chip>
+                    <Chip
+                      active={settings.openaiModeration === 'low'}
+                      onClick={() => onUpdate({ openaiModeration: 'low' })}
+                      disabled={disabled}
+                      wide
+                    >
+                      Low
+                    </Chip>
+                  </div>
+                  <p className="mt-1 text-[10px] text-zinc-600">
+                    Low is less restrictive for borderline-but-allowed prompts. Only applies to text-to-image runs.
+                  </p>
+                </Field>
+              </div>
+            )}
+          </div>
+        )}
 
-      <Field label={`Number of images · ${settings.targetCount}`}>
-        <input
-          type="range"
-          min={1}
-          max={12}
-          value={settings.targetCount}
-          onChange={(e) => onUpdate({ targetCount: Number(e.target.value) })}
-          disabled={disabled}
-          className="w-full accent-blue-500"
+        {isXai && supportsXaiQuality(effectiveXaiModelId(settings)) && (
+          <Field label="Quality">
+            <div className="grid grid-cols-2 gap-1.5">
+              {(['medium', 'low'] as const).map((q) => (
+                <Chip
+                  key={q}
+                  active={settings.xaiQuality === q}
+                  onClick={() => onUpdate({ xaiQuality: q })}
+                  disabled={disabled}
+                  wide
+                >
+                  {q === 'medium' ? 'Medium (default)' : 'Low'}
+                </Chip>
+              ))}
+            </div>
+            <p className="mt-1 text-[10px] text-zinc-600">
+              Only Grok Imagine 2.0 accepts this — it is left out of the request for every other model.
+            </p>
+          </Field>
+        )}
+
+        <Field label="Output format" hidden={model.output === 'video'}>
+          <div className="grid grid-cols-2 gap-1.5">
+            {FORMATS.map((f) => (
+              <Chip
+                key={f.value}
+                active={settings.format === f.value}
+                onClick={() => onUpdate({ format: f.value })}
+                disabled={disabled}
+                wide
+              >
+                {f.label}
+              </Chip>
+            ))}
+          </div>
+        </Field>
+      </Section>
+
+      <Section icon="🔁" title="How many & retries">
+        <Field label={`Number of ${model.output === 'video' ? 'videos' : 'images'} · ${settings.targetCount}`}>
+          <input
+            type="range"
+            min={1}
+            max={12}
+            value={settings.targetCount}
+            onChange={(e) => onUpdate({ targetCount: Number(e.target.value) })}
+            disabled={disabled}
+            className="w-full accent-blue-500"
+          />
+          <p className="mt-1 text-[10px] text-zinc-600">
+            Auto-retries failed generations until this many images are collected.
+          </p>
+        </Field>
+
+        <Field label="Max attempts">
+          <MaxAttemptsControl
+            value={settings.attemptsCap}
+            onChange={(attemptsCap) => onUpdate({ attemptsCap })}
+            disabled={disabled}
+          />
+          <p className="mt-1 text-[10px] text-zinc-600">
+            Safety cap: the run stops here even if fewer images were collected, so a permanently blocked prompt can't
+            burn quota forever.
+          </p>
+        </Field>
+      </Section>
+
+      <Section icon="🔑" title="API keys">
+        <ApiKeySection
+          // Remount on provider switch so the inputs show the new key set
+          key={model.provider}
+          apiKeys={apiKeys}
+          onChange={onApiKeyChange}
+          providerName={isXai ? 'xAI API' : isOpenai ? 'OpenAI API' : undefined}
+          placeholder={isXai ? 'xai-…' : isOpenai ? 'sk-…' : undefined}
+          note={isXai ? XAI_KEY_NOTE : isOpenai ? OPENAI_KEY_NOTE : undefined}
         />
-        <p className="mt-1 text-[10px] text-zinc-600">
-          Auto-retries failed generations until this many images are collected.
-        </p>
-      </Field>
-
-      <Field label="Max attempts">
-        <MaxAttemptsControl
-          value={settings.attemptsCap}
-          onChange={(attemptsCap) => onUpdate({ attemptsCap })}
-          disabled={disabled}
-        />
-        <p className="mt-1 text-[10px] text-zinc-600">
-          Safety cap: the run stops here even if fewer images were collected, so a permanently
-          blocked prompt can't burn quota forever.
-        </p>
-      </Field>
-
-      <div className="mt-auto border-t border-zinc-800 pt-4">
-        <ApiKeySection apiKeys={apiKeys} onChange={onApiKeyChange} />
-      </div>
+      </Section>
     </aside>
   )
 }
 
-export function Field({ label, children }: { label: string; children: React.ReactNode }) {
+// Lists the model IDs the key itself can use — the only reliable way to learn
+// the ID of a model released after this app was built.
+function ModelDiscovery({
+  apiKey,
+  disabled,
+  list,
+  onPick,
+}: {
+  apiKey: string
+  disabled: boolean
+  list: (apiKey: string) => Promise<string[]>
+  onPick: (id: string) => void
+}) {
+  const [state, setState] = useState<
+    | { status: 'idle' }
+    | { status: 'loading' }
+    | { status: 'done'; ids: string[] }
+    | { status: 'error'; message: string }
+  >({ status: 'idle' })
+
+  const fetchModels = async () => {
+    setState({ status: 'loading' })
+    try {
+      const ids = await list(apiKey)
+      setState({ status: 'done', ids })
+    } catch (err) {
+      setState({ status: 'error', message: err instanceof Error ? err.message : String(err) })
+    }
+  }
+
+  const imageIds = state.status === 'done' ? state.ids.filter((id) => /imag/i.test(id)) : []
+  const shown = state.status === 'done' ? (imageIds.length > 0 ? imageIds : state.ids) : []
+
+  return (
+    <div className="mt-2">
+      <button
+        type="button"
+        onClick={() => void fetchModels()}
+        disabled={disabled || !apiKey || state.status === 'loading'}
+        title={apiKey ? 'Ask xAI which models this key can use' : 'Enter your xAI API key below first'}
+        className="rounded-md border border-zinc-700 px-2.5 py-1 text-[10px] text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 disabled:opacity-40"
+      >
+        {state.status === 'loading' ? 'Loading…' : 'List models my key can use'}
+      </button>
+      {state.status === 'error' && (
+        <p className="mt-1.5 text-[10px] text-red-400">Could not list models — {state.message}</p>
+      )}
+      {state.status === 'done' && shown.length === 0 && (
+        <p className="mt-1.5 text-[10px] text-amber-400/90">The API returned no model list for this key.</p>
+      )}
+      {shown.length > 0 && (
+        <div className="mt-1.5 flex flex-wrap gap-1">
+          {shown.map((id) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => onPick(id)}
+              disabled={disabled}
+              className="rounded border border-zinc-700 bg-zinc-900 px-1.5 py-0.5 text-[10px] text-blue-300 hover:border-blue-500 disabled:opacity-40"
+            >
+              {id}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function Section({ icon, title, children }: { icon: string; title: string; children: React.ReactNode }) {
+  return (
+    <section className="soft-shadow space-y-4 rounded-2xl border border-zinc-800 bg-zinc-900 p-4">
+      <h3 className="flex items-center gap-2 text-[13px] font-semibold text-zinc-200">
+        <span aria-hidden>{icon}</span>
+        {title}
+      </h3>
+      {children}
+    </section>
+  )
+}
+
+export function Field({ label, hidden, children }: { label: string; hidden?: boolean; children: React.ReactNode }) {
+  if (hidden) return null
   return (
     <div>
       <div className="mb-1.5 text-xs font-medium text-zinc-400">{label}</div>
@@ -172,11 +520,11 @@ export function Chip({
       type="button"
       onClick={onClick}
       disabled={disabled}
-      className={`rounded-md border px-2.5 py-1.5 text-[11px] transition-colors disabled:opacity-50 ${
+      className={`rounded-lg border px-2.5 py-1.5 text-[11px] transition-colors disabled:opacity-50 ${
         wide ? 'w-full' : ''
       } ${
         active
-          ? 'border-blue-500 bg-blue-500/15 text-blue-300'
+          ? 'border-blue-500 bg-blue-500/15 font-medium text-blue-300'
           : 'border-zinc-700 bg-zinc-900 text-zinc-400 hover:border-zinc-600 hover:text-zinc-300'
       }`}
     >

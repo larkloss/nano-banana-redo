@@ -1,9 +1,15 @@
-import type { PromptModule, PromptWorkspace, Settings, VideoSettings } from '../types'
+import type { PromptModule, PromptWorkspace, Provider, Settings, VideoSettings } from '../types'
 import { MODELS, getModel } from './models'
 import { VEO_MODELS } from './veoModels'
 
 const SETTINGS_KEY = 'nbr.settings.v1'
-const API_KEY_KEYS = ['nbr.apiKey', 'nbr.apiKey2', 'nbr.apiKey3'] as const
+// Per-provider key sets — a Gemini key and an xAI key are stored side by side
+// so switching models never means re-entering credentials.
+const PROVIDER_KEY_NAMES: Record<Provider, readonly [string, string, string]> = {
+  gemini: ['nbr.apiKey', 'nbr.apiKey2', 'nbr.apiKey3'],
+  xai: ['nbr.xaiApiKey', 'nbr.xaiApiKey2', 'nbr.xaiApiKey3'],
+  openai: ['nbr.openaiApiKey', 'nbr.openaiApiKey2', 'nbr.openaiApiKey3'],
+}
 // One-shot marker: bumps previously-persisted attempts caps to the new
 // default of 50 without resetting any other stored settings
 const CAP_MIGRATION_KEY = 'nbr.capDefault50'
@@ -16,10 +22,47 @@ export const DEFAULT_SETTINGS: Settings = {
   systemInstruction: '',
   aspectRatio: 'auto',
   imageSize: '1K',
+  xaiResolution: '1k',
+  xaiQuality: 'medium',
+  omniResolution: '720p',
+  openaiQuality: 'auto',
+  openaiSizeTier: 'standard',
+  openaiModeration: 'auto',
+  groundWebSearch: false,
+  groundImageSearch: false,
+  xaiModelId: '',
   format: 'png',
   targetCount: 5,
   attemptsCap: 50,
   prompt: '',
+}
+
+// Shared by localStorage loading and by settings adopted from a synced file,
+// so anything hand-edited or written by an older version is clamped the same
+// way. Never carries API keys — those live in their own storage entries.
+export function normalizeSettings(raw: unknown): Settings {
+  const parsed = { ...DEFAULT_SETTINGS, ...(raw as Partial<Settings>) } as Settings
+  if (!MODELS.some((m) => m.id === parsed.modelId)) parsed.modelId = DEFAULT_SETTINGS.modelId
+  const model = getModel(parsed.modelId)
+  if (parsed.aspectRatio !== 'auto' && !model.aspectRatios.includes(parsed.aspectRatio)) {
+    parsed.aspectRatio = 'auto'
+  }
+  if (!['1K', '2K', '4K'].includes(parsed.imageSize)) parsed.imageSize = '1K'
+  if (parsed.xaiResolution !== '2k') parsed.xaiResolution = '1k'
+  if (parsed.xaiQuality !== 'low') parsed.xaiQuality = 'medium'
+  if (!['360p', '720p', '1080p', '4k'].includes(parsed.omniResolution)) parsed.omniResolution = '720p'
+  if (!['auto', 'low', 'medium', 'high', 'xhigh', 'max'].includes(parsed.openaiQuality)) parsed.openaiQuality = 'auto'
+  if (!['standard', '2k', '4k'].includes(parsed.openaiSizeTier)) parsed.openaiSizeTier = 'standard'
+  if (parsed.openaiModeration !== 'low') parsed.openaiModeration = 'auto'
+  parsed.groundWebSearch = parsed.groundWebSearch === true
+  parsed.groundImageSearch = parsed.groundImageSearch === true
+  if (typeof parsed.xaiModelId !== 'string') parsed.xaiModelId = ''
+  if (parsed.format !== 'jpg') parsed.format = 'png'
+  if (typeof parsed.systemInstruction !== 'string') parsed.systemInstruction = ''
+  if (typeof parsed.prompt !== 'string') parsed.prompt = ''
+  parsed.targetCount = clampInt(parsed.targetCount, 1, 12, 5)
+  parsed.attemptsCap = clampInt(parsed.attemptsCap, 1, 200, 50)
+  return parsed
 }
 
 export function loadSettings(): Settings {
@@ -27,17 +70,7 @@ export function loadSettings(): Settings {
   try {
     const raw = localStorage.getItem(SETTINGS_KEY)
     if (!raw) return DEFAULT_SETTINGS
-    const parsed = { ...DEFAULT_SETTINGS, ...JSON.parse(raw) } as Settings
-    if (!MODELS.some((m) => m.id === parsed.modelId)) parsed.modelId = DEFAULT_SETTINGS.modelId
-    const model = getModel(parsed.modelId)
-    if (parsed.aspectRatio !== 'auto' && !model.aspectRatios.includes(parsed.aspectRatio)) {
-      parsed.aspectRatio = 'auto'
-    }
-    if (!['1K', '2K', '4K'].includes(parsed.imageSize)) parsed.imageSize = '1K'
-    if (parsed.format !== 'jpg') parsed.format = 'png'
-    if (typeof parsed.systemInstruction !== 'string') parsed.systemInstruction = ''
-    parsed.targetCount = clampInt(parsed.targetCount, 1, 12, 5)
-    parsed.attemptsCap = clampInt(parsed.attemptsCap, 1, 200, 50)
+    const parsed = normalizeSettings(JSON.parse(raw))
     if (migrateCap) {
       parsed.attemptsCap = DEFAULT_SETTINGS.attemptsCap
       saveSettings(parsed)
@@ -208,22 +241,24 @@ export function saveSettings(settings: Settings): void {
   }
 }
 
-export function loadApiKeys(): ApiKeys {
+export function loadApiKeys(provider: Provider = 'gemini'): ApiKeys {
+  const names = PROVIDER_KEY_NAMES[provider]
   try {
     return [
-      localStorage.getItem(API_KEY_KEYS[0]) ?? '',
-      localStorage.getItem(API_KEY_KEYS[1]) ?? '',
-      localStorage.getItem(API_KEY_KEYS[2]) ?? '',
+      localStorage.getItem(names[0]) ?? '',
+      localStorage.getItem(names[1]) ?? '',
+      localStorage.getItem(names[2]) ?? '',
     ]
   } catch {
     return ['', '', '']
   }
 }
 
-export function saveApiKey(index: ApiKeyIndex, key: string): void {
+export function saveApiKey(index: ApiKeyIndex, key: string, provider: Provider = 'gemini'): void {
   try {
-    if (key) localStorage.setItem(API_KEY_KEYS[index], key)
-    else localStorage.removeItem(API_KEY_KEYS[index])
+    const name = PROVIDER_KEY_NAMES[provider][index]
+    if (key) localStorage.setItem(name, key)
+    else localStorage.removeItem(name)
   } catch {
     // ignore
   }

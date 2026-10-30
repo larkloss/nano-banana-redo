@@ -9,21 +9,46 @@ export function base64ToBlob(base64: string, mimeType: string): Blob {
   return new Blob([bytes], { type: mimeType })
 }
 
+// The format a blob REALLY is, read from its magic bytes. Providers' declared
+// mime types are not trustworthy here — Gemini has been seen labelling JPEG
+// bytes as image/png — and a wrong label used to skip the re-encode, leaving
+// a .png file that was actually a JPEG.
+export async function sniffImageMimeType(blob: Blob, fallback: string): Promise<string> {
+  const head = new Uint8Array(await blob.slice(0, 12).arrayBuffer())
+  if (head[0] === 0x89 && head[1] === 0x50 && head[2] === 0x4e && head[3] === 0x47) return 'image/png'
+  if (head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff) return 'image/jpeg'
+  if (head[0] === 0x52 && head[1] === 0x49 && head[2] === 0x46 && head[3] === 0x46 && head[8] === 0x57 && head[9] === 0x45) {
+    return 'image/webp'
+  }
+  if (head[0] === 0x47 && head[1] === 0x49 && head[2] === 0x46) return 'image/gif'
+  return fallback
+}
+
 export async function processImagePart(
   part: ParsedImagePart,
   format: OutputFormat,
   meta: { attempt: number; modelId: string },
 ): Promise<GeneratedImage> {
   const raw = base64ToBlob(part.base64, part.mimeType)
+  // Decide on the real bytes, not the label the API attached to them
+  const actual = await sniffImageMimeType(raw, part.mimeType)
   const bitmap = await createImageBitmap(raw)
   let blob = raw
-  let mimeType = part.mimeType
-  if (format === 'jpg' && part.mimeType !== 'image/jpeg') {
+  let mimeType = actual
+  if (format === 'jpg' && actual !== 'image/jpeg') {
     blob = await toJpeg(bitmap)
     mimeType = 'image/jpeg'
+  } else if (format === 'png' && actual !== 'image/png') {
+    blob = await toPng(bitmap)
+    mimeType = 'image/png'
+  } else if (blob.type !== actual) {
+    // Right format already, just mislabelled — fix the blob's type so the
+    // browser's download and preview treat it correctly
+    blob = new Blob([raw], { type: actual })
   }
   const image: GeneratedImage = {
     id: crypto.randomUUID(),
+    kind: 'image',
     blob,
     objectUrl: URL.createObjectURL(blob),
     width: bitmap.width,
@@ -38,21 +63,75 @@ export async function processImagePart(
   return image
 }
 
-async function toJpeg(bitmap: ImageBitmap): Promise<Blob> {
+async function toPng(bitmap: ImageBitmap): Promise<Blob> {
+  const canvas = new OffscreenCanvas(bitmap.width, bitmap.height)
+  canvas.getContext('2d')!.drawImage(bitmap, 0, 0)
+  return canvas.convertToBlob({ type: 'image/png' })
+}
+
+async function toJpeg(bitmap: ImageBitmap, quality = 0.92): Promise<Blob> {
   const canvas = new OffscreenCanvas(bitmap.width, bitmap.height)
   const ctx = canvas.getContext('2d')!
   // JPEG has no alpha channel; composite over white
   ctx.fillStyle = '#ffffff'
   ctx.fillRect(0, 0, bitmap.width, bitmap.height)
   ctx.drawImage(bitmap, 0, 0)
-  return canvas.convertToBlob({ type: 'image/jpeg', quality: 0.92 })
+  return canvas.convertToBlob({ type: 'image/jpeg', quality })
+}
+
+// Video results skip all the canvas work — the bytes are already an mp4; only
+// the dimensions and duration are probed so the card can label them.
+export async function processVideoPart(
+  part: ParsedImagePart,
+  meta: { attempt: number; modelId: string },
+): Promise<GeneratedImage> {
+  const blob = base64ToBlob(part.base64, part.mimeType)
+  const objectUrl = URL.createObjectURL(blob)
+  const probe = await probeVideo(objectUrl)
+  return {
+    id: crypto.randomUUID(),
+    kind: 'video',
+    blob,
+    objectUrl,
+    width: probe.width,
+    height: probe.height,
+    duration: probe.duration,
+    mimeType: part.mimeType,
+    format: 'png',
+    attempt: meta.attempt,
+    modelId: meta.modelId,
+    createdAt: Date.now(),
+  }
+}
+
+function probeVideo(url: string): Promise<{ width: number; height: number; duration: number }> {
+  return new Promise((resolve) => {
+    const video = document.createElement('video')
+    video.preload = 'metadata'
+    const done = () =>
+      resolve({
+        width: video.videoWidth || 0,
+        height: video.videoHeight || 0,
+        duration: Number.isFinite(video.duration) ? video.duration : 0,
+      })
+    video.onloadedmetadata = done
+    video.onerror = () => resolve({ width: 0, height: 0, duration: 0 })
+    video.src = url
+  })
 }
 
 export function makeFilename(image: GeneratedImage, index: number): string {
+  if (image.kind === 'video') {
+    const stamp = new Date(image.createdAt).toISOString().slice(0, 19).replace(/[:T]/g, '-')
+    const slug = getModel(image.modelId).filenameSlug
+    const ext = image.mimeType.includes('webm') ? 'webm' : 'mp4'
+    return `abigail-${slug}_${stamp}_${String(index + 1).padStart(2, '0')}.${ext}`
+  }
   const ext = image.format === 'jpg' ? 'jpg' : 'png'
   const stamp = new Date(image.createdAt).toISOString().slice(0, 19).replace(/[:T]/g, '-')
   const slug = getModel(image.modelId).filenameSlug
-  return `abigail-${slug}_${stamp}_${String(index + 1).padStart(2, '0')}.${ext}`
+  const edit = image.edit ? `-edit-v${image.edit.version}` : ''
+  return `abigail-${slug}${edit}_${stamp}_${String(index + 1).padStart(2, '0')}.${ext}`
 }
 
 export function downloadBlob(blob: Blob, filename: string): void {
@@ -69,6 +148,30 @@ export async function downloadAllAsZip(images: GeneratedImage[]): Promise<void> 
   images.forEach((img, i) => zip.file(makeFilename(img, i), img.blob))
   const blob = await zip.generateAsync({ type: 'blob' })
   downloadBlob(blob, `abigail-chase_${Date.now()}.zip`)
+}
+
+// Inline image data has a ~20MB request ceiling on Gemini, and a 4K PNG can
+// eat most of it on its own, so oversized edit sources travel as a
+// high-quality JPEG instead. Everything else is sent byte-for-byte.
+const MAX_SOURCE_BYTES = 7 * 1024 * 1024
+
+export async function imageToReference(image: GeneratedImage): Promise<ParsedImagePart> {
+  let blob = image.blob
+  if (blob.size > MAX_SOURCE_BYTES) {
+    const bitmap = await createImageBitmap(blob)
+    blob = await toJpeg(bitmap, 0.95)
+    bitmap.close()
+  }
+  return { base64: await blobToBase64(blob), mimeType: blob.type || image.mimeType }
+}
+
+function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve((reader.result as string).split(',')[1])
+    reader.onerror = () => reject(reader.error)
+    reader.readAsDataURL(blob)
+  })
 }
 
 export function fileToReference(file: File): Promise<{ base64: string; mimeType: string }> {

@@ -3,6 +3,7 @@ import type { VideoSettings } from '../../types'
 import { VEO_MODELS, getVeoModel, estimateVideoCost } from '../../lib/veoModels'
 import { ApiKeySection } from '../../components/settings/ApiKeySection'
 import { Field, Chip } from '../../components/settings/RunSettingsPanel'
+import { ExpandableTextarea } from '../../components/common/ExpandableTextarea'
 
 interface Props {
   settings: VideoSettings
@@ -84,13 +85,13 @@ export function VideoSettingsPanel({ settings, onUpdate, apiKeys, onApiKeyChange
       </Field>
 
       <Field label="Negative prompt">
-        <textarea
+        <ExpandableTextarea
           value={settings.negativePrompt}
-          onChange={(e) => onUpdate({ negativePrompt: e.target.value })}
+          onChange={(negativePrompt) => onUpdate({ negativePrompt })}
+          label="Negative prompt"
           disabled={disabled}
           placeholder="What should NOT appear — e.g. cartoon style, text overlays, extra people…"
           rows={3}
-          spellCheck={false}
           className="w-full resize-y rounded-md border border-zinc-700 bg-zinc-900 px-2.5 py-2 text-xs leading-relaxed text-zinc-200 placeholder-zinc-600 outline-none focus:border-blue-500 disabled:opacity-50"
         />
       </Field>

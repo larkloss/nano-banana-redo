@@ -1,11 +1,13 @@
-import { useEffect, useRef, useState } from 'react'
-import type { Settings } from '../types'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import type { Provider, Settings } from '../types'
 import { loadSettings, saveSettings, loadApiKeys, saveApiKey, type ApiKeys, type ApiKeyIndex } from '../lib/storage'
-import { getModel } from '../lib/models'
+import { getModel, getProvider } from '../lib/models'
 
 export function useSettings() {
   const [settings, setSettings] = useState<Settings>(loadSettings)
-  const [apiKeys, setApiKeysState] = useState<ApiKeys>(loadApiKeys)
+  const [geminiKeys, setGeminiKeys] = useState<ApiKeys>(() => loadApiKeys('gemini'))
+  const [xaiKeys, setXaiKeys] = useState<ApiKeys>(() => loadApiKeys('xai'))
+  const [openaiKeys, setOpenaiKeys] = useState<ApiKeys>(() => loadApiKeys('openai'))
   const saveTimer = useRef<number | undefined>(undefined)
 
   useEffect(() => {
@@ -13,6 +15,11 @@ export function useSettings() {
     saveTimer.current = window.setTimeout(() => saveSettings(settings), 500)
     return () => clearTimeout(saveTimer.current)
   }, [settings])
+
+  const provider = getProvider(settings.modelId)
+  const keySets = { gemini: geminiKeys, xai: xaiKeys, openai: openaiKeys } as const
+  const keySetters = { gemini: setGeminiKeys, xai: setXaiKeys, openai: setOpenaiKeys } as const
+  const apiKeys = keySets[provider]
 
   const update = (patch: Partial<Settings>) => {
     setSettings((prev) => {
@@ -24,19 +31,32 @@ export function useSettings() {
           next.aspectRatio = 'auto'
         }
         if (!model.supportsImageSize) next.imageSize = '1K'
+        // A typed model-ID override belongs to the model it was typed for
+        if (getProvider(patch.modelId) !== getProvider(prev.modelId)) next.xaiModelId = ''
       }
       return next
     })
   }
 
+  // Wholesale swap from a synced file — API keys are not part of Settings and
+  // therefore never travel with it
+  const replaceSettings = (next: Settings) => setSettings(next)
+
+  // Writes to whichever provider's key set is currently selected
   const setApiKey = (index: ApiKeyIndex, key: string) => {
-    setApiKeysState((prev) => {
+    const setter = keySetters[provider]
+    setter((prev) => {
       const next: ApiKeys = [...prev]
       next[index] = key
       return next
     })
-    saveApiKey(index, key)
+    saveApiKey(index, key, provider)
   }
 
-  return { settings, update, apiKeys, setApiKey }
+  const keysByProvider = useMemo<Record<Provider, ApiKeys>>(
+    () => ({ gemini: geminiKeys, xai: xaiKeys, openai: openaiKeys }),
+    [geminiKeys, xaiKeys, openaiKeys],
+  )
+
+  return { settings, update, replaceSettings, provider, apiKeys, setApiKey, keysByProvider }
 }

@@ -25,3 +25,60 @@ body {
 ::-webkit-scrollbar-track {
   background-color: transparent;
 }
+
+/* ---------------------------------------------------------------------------
+   Generator themes. The components are written against Tailwind's zinc/blue
+   scales, so a theme just re-points those variables: "light" is a warm paper
+   palette with the scale inverted (950 = page, 200 = body text), "dark" is
+   the original zinc look. Both swap the blue accent for a friendlier violet.
+   Unlayered on purpose so these beat Tailwind's @layer theme defaults. The
+   edit and video apps never set a theme class and keep the stock palette.
+   --------------------------------------------------------------------------- */
+html.theme-light {
+  color-scheme: light;
+  --color-zinc-50: #15110d;
+  --color-zinc-100: #1f1a15;
+  --color-zinc-200: #2e2822;
+  --color-zinc-300: #463e35;
+  --color-zinc-400: #5f5549;
+  --color-zinc-500: #776c5f;
+  --color-zinc-600: #8a7f71;
+  --color-zinc-700: #e0d6c7;
+  --color-zinc-800: #ede6da;
+  --color-zinc-900: #ffffff;
+  --color-zinc-950: #f8f4ec;
+
+  --color-blue-300: #5a43d6;
+  --color-blue-400: #6f58ea;
+  --color-blue-500: #7b66f2;
+  --color-blue-600: #6550e6;
+  --color-blue-700: #5440cf;
+
+  --color-amber-300: #92400e;
+  --color-amber-400: #b45309;
+  --color-red-300: #b91c1c;
+  --color-red-400: #dc2626;
+  --color-emerald-300: #065f46;
+  --color-emerald-400: #047857;
+}
+
+html.theme-dark {
+  color-scheme: dark;
+  --color-zinc-950: #141217;
+  --color-zinc-900: #1d1a21;
+  --color-zinc-800: #2b2730;
+  --color-zinc-700: #3b3641;
+
+  --color-blue-300: #c9bfff;
+  --color-blue-400: #a998ff;
+  --color-blue-500: #8b7bff;
+  --color-blue-600: #6d5dfc;
+  --color-blue-700: #5b4be0;
+}
+
+html.theme-light .soft-shadow {
+  box-shadow: 0 1px 2px rgb(60 40 20 / 0.05), 0 4px 16px rgb(60 40 20 / 0.06);
+}
+html.theme-dark .soft-shadow {
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.3);
+}
