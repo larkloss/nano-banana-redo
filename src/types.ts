@@ -95,6 +95,8 @@ export interface GeneratedImage {
   attempt: number
   modelId: string
   createdAt: number
+  // Set on results of the edit studio: which edit chain and version they are
+  edit?: { sessionId: string; version: number; prompt: string }
 }
 
 export type RunStatus =

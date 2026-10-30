@@ -64,13 +64,13 @@ export function PromptPanel({
       }}
       onDragLeave={() => setDragOver(false)}
       onDrop={handleDrop}
-      className={`relative rounded-xl border bg-zinc-900/60 p-4 transition-colors ${
+      className={`soft-shadow relative rounded-2xl border bg-zinc-900 p-4 transition-colors ${
         dragOver ? 'border-blue-500' : 'border-zinc-800'
       }`}
     >
       {dragOver && (
-        <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-xl bg-blue-500/10 text-sm text-blue-300">
-          Drop reference images
+        <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-2xl bg-blue-500/10 text-sm font-medium text-blue-300">
+          Drop your reference photos here
         </div>
       )}
 
@@ -83,13 +83,20 @@ export function PromptPanel({
             </span>
           </span>
         ) : (
-          <div className="flex gap-1 rounded-lg border border-zinc-800 bg-zinc-950/60 p-0.5">
-            <TabButton active={mode === 'modular'} onClick={() => workspaceApi.setMode('modular')} disabled={disabled}>
-              Modular
-            </TabButton>
-            <TabButton active={mode === 'simple'} onClick={() => workspaceApi.setMode('simple')} disabled={disabled}>
-              Simple
-            </TabButton>
+          <div className="flex items-center gap-3">
+            <span className="text-sm font-semibold text-zinc-200">What should we make?</span>
+            <div className="flex gap-1 rounded-full border border-zinc-800 bg-zinc-950 p-0.5">
+              <TabButton
+                active={mode === 'modular'}
+                onClick={() => workspaceApi.setMode('modular')}
+                disabled={disabled}
+              >
+                Modular
+              </TabButton>
+              <TabButton active={mode === 'simple'} onClick={() => workspaceApi.setMode('simple')} disabled={disabled}>
+                Simple
+              </TabButton>
+            </div>
           </div>
         )}
         {(singleBox || mode === 'simple') && (
@@ -98,7 +105,7 @@ export function PromptPanel({
             onClick={() => void saveTextAsMarkdown(prompt, promptFilename())}
             disabled={!prompt.trim()}
             title="Save the prompt as a .md file — Chrome/Edge ask where to save it"
-            className="rounded-md border border-zinc-700 px-2.5 py-1 text-[10px] text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 disabled:opacity-40"
+            className="rounded-full border border-zinc-700 px-3 py-1 text-[11px] text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 disabled:opacity-40"
           >
             ↓ Save prompt (.md)
           </button>
@@ -124,8 +131,8 @@ export function PromptPanel({
       )}
 
       <div className="mt-3 border-t border-zinc-800 pt-3">
-        <div className="mb-2 text-xs font-medium text-zinc-400">
-          Reference images <span className="font-normal text-zinc-600">(optional — drag &amp; drop or click +)</span>
+        <div className="mb-2 text-xs font-medium text-zinc-300">
+          📎 Reference photos <span className="font-normal text-zinc-500">· optional — drag them in or click +</span>
         </div>
         <ReferenceImageStrip
           references={references}
@@ -155,8 +162,8 @@ function TabButton({
       type="button"
       onClick={onClick}
       disabled={disabled}
-      className={`rounded-md px-3 py-1 text-xs transition-colors disabled:opacity-50 ${
-        active ? 'bg-blue-500/15 font-medium text-blue-300' : 'text-zinc-500 hover:text-zinc-300'
+      className={`rounded-full px-3 py-1 text-xs transition-colors disabled:opacity-50 ${
+        active ? 'bg-blue-600 font-medium text-white' : 'text-zinc-500 hover:text-zinc-300'
       }`}
     >
       {children}

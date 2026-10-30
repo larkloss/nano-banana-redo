@@ -45,7 +45,7 @@ export function ReferenceImageStrip({ references, onChange, disabled, max = 6, a
             src={ref.objectUrl}
             alt={ref.name}
             title={ref.name}
-            className="h-20 w-20 rounded-md border border-zinc-700 object-cover"
+            className="h-20 w-20 rounded-xl border border-zinc-700 object-cover"
           />
           {!disabled && (
             <button
@@ -64,7 +64,7 @@ export function ReferenceImageStrip({ references, onChange, disabled, max = 6, a
           type="button"
           onClick={() => inputRef.current?.click()}
           disabled={disabled}
-          className="flex h-20 w-20 flex-col items-center justify-center gap-1 rounded-md border border-dashed border-zinc-700 text-zinc-500 hover:border-zinc-500 hover:text-zinc-400 disabled:opacity-50"
+          className="flex h-20 w-20 flex-col items-center justify-center gap-1 rounded-xl border-2 border-dashed border-zinc-700 text-zinc-500 hover:border-zinc-500 hover:text-zinc-400 disabled:opacity-50"
         >
           <span className="text-lg leading-none">+</span>
           <span className="text-[9px]">{addLabel}</span>

@@ -7,9 +7,10 @@ interface Props {
   index: number
   onClose: () => void
   onNavigate: (index: number) => void
+  onEdit?: (image: GeneratedImage) => void
 }
 
-export function Lightbox({ images, index, onClose, onNavigate }: Props) {
+export function Lightbox({ images, index, onClose, onNavigate, onEdit }: Props) {
   const image = images[index]
 
   useEffect(() => {
@@ -43,24 +44,33 @@ export function Lightbox({ images, index, onClose, onNavigate }: Props) {
           <img
             src={image.objectUrl}
             alt={`Generated ${index + 1}`}
-            className="max-h-[85vh] max-w-full rounded-lg object-contain"
+            className="max-h-[85vh] max-w-full rounded-2xl object-contain"
           />
         )}
-        <div className="absolute -top-9 right-0 flex items-center gap-3 text-xs text-zinc-300">
+        <div className="absolute -top-10 right-0 flex items-center gap-2 text-xs text-white/80">
           <span>
             {index + 1}/{images.length} · {image.width}×{image.height}
           </span>
+          {onEdit && image.kind === 'image' && (
+            <button
+              type="button"
+              onClick={() => onEdit(image)}
+              className="rounded-full bg-blue-600 px-3.5 py-1.5 font-medium text-white hover:bg-blue-500"
+            >
+              ✏️ Edit this picture
+            </button>
+          )}
           <button
             type="button"
             onClick={() => downloadBlob(image.blob, makeFilename(image, index))}
-            className="rounded-md bg-zinc-800 px-3 py-1.5 hover:bg-zinc-700"
+            className="rounded-full bg-white/10 px-3.5 py-1.5 text-white hover:bg-white/20"
           >
             Download
           </button>
           <button
             type="button"
             onClick={onClose}
-            className="rounded-md bg-zinc-800 px-3 py-1.5 hover:bg-zinc-700"
+            className="rounded-full bg-white/10 px-3 py-1.5 text-white hover:bg-white/20"
           >
             ✕
           </button>
@@ -81,7 +91,7 @@ function NavButton({ side, onClick }: { side: 'left' | 'right'; onClick: () => v
     <button
       type="button"
       onClick={onClick}
-      className={`absolute top-1/2 -translate-y-1/2 rounded-full bg-zinc-800/80 p-3 text-zinc-200 hover:bg-zinc-700 ${
+      className={`absolute top-1/2 -translate-y-1/2 rounded-full bg-white/10 p-3 text-white hover:bg-white/20 ${
         side === 'left' ? '-left-14' : '-right-14'
       }`}
     >
