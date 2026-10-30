@@ -15,6 +15,13 @@ export function Gallery({ images, onClear, onEdit, isRunning }: Props) {
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null)
   const [zipping, setZipping] = useState(false)
   const [confirmClear, setConfirmClear] = useState(false)
+  // A pending "Remove all?" must not survive into a run that has started
+  // (adjusting state during render, React's recommended alternative to an effect)
+  const [wasRunning, setWasRunning] = useState(isRunning)
+  if (isRunning !== wasRunning) {
+    setWasRunning(isRunning)
+    if (isRunning) setConfirmClear(false)
+  }
 
   if (images.length === 0) {
     return (
@@ -22,8 +29,8 @@ export function Gallery({ images, onClear, onEdit, isRunning }: Props) {
         <span className="flex h-14 w-14 items-center justify-center rounded-full bg-zinc-900 text-2xl">🍌</span>
         <p className="text-sm font-medium text-zinc-300">Your pictures will show up here</p>
         <p className="max-w-sm text-xs text-zinc-500">
-          Write a prompt, press Generate, and grab a coffee — refused attempts are retried for you. Click
-          “Edit” on any picture to keep refining it.
+          Write a prompt, press Generate, and grab a coffee — refused attempts are retried for you. Click “Edit” on any
+          picture to keep refining it.
         </p>
       </div>
     )
@@ -51,7 +58,7 @@ export function Gallery({ images, onClear, onEdit, isRunning }: Props) {
               {zipping ? 'Zipping…' : '↓ Download all'}
             </button>
           )}
-          {confirmClear ? (
+          {confirmClear && !isRunning ? (
             <span className="flex items-center gap-1 rounded-full border border-red-500/40 px-1 py-0.5 text-xs">
               <span className="px-1.5 text-zinc-400">Remove all?</span>
               <button

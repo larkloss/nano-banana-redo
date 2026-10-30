@@ -9,7 +9,8 @@ interface Props {
   session: EditSession
   settings: Settings
   referenceCount: number
-  runState: RunState
+  // null while the edit is still being prepared (nothing sent yet)
+  runState: RunState | null
   isRunning: boolean
   runningTurn: { sessionId: string; turnId: string } | null
   onSelectVersion: (versionId: string) => void

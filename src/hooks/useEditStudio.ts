@@ -67,6 +67,12 @@ export function useEditStudio({ settings, references, onResult }: Options) {
   // Synchronous guard: two quick submits must not both get past the check
   // before React re-renders with isRunning = true
   const busyRef = useRef(false)
+  // True between "Apply edit" and the engine actually starting (the source
+  // picture is being read back for upload). Counts as busy everywhere, and a
+  // stop pressed in that window cancels the edit before any request is sent.
+  const [preparing, setPreparing] = useState(false)
+  const cancelledRef = useRef(false)
+  const busy = run.isRunning || preparing
 
   const patchSession = useCallback((sessionId: string, patch: (s: EditSession) => EditSession) => {
     setSessions((prev) => (prev[sessionId] ? { ...prev, [sessionId]: patch(prev[sessionId]) } : prev))
@@ -149,6 +155,8 @@ export function useEditStudio({ settings, references, onResult }: Options) {
           : turn.prompt
 
       busyRef.current = true
+      cancelledRef.current = false
+      setPreparing(true)
       patchSession(sessionId, (s) => ({ ...s, turns: [...s.turns.filter((t) => t.id !== turn.id), turn] }))
       setRunningTurn({ sessionId, turnId: turn.id })
       try {
@@ -157,7 +165,9 @@ export function useEditStudio({ settings, references, onResult }: Options) {
           modelId: turn.modelId,
           // An empty override would be ignored anyway; a stale one for another
           // provider must not leak into this request
-          xaiModelId: getModel(settings.modelId).provider === model.provider ? settings.xaiModelId : '',
+          // The typed model ID override belongs to the main settings' model;
+          // picking a different model in the studio must actually switch
+          xaiModelId: turn.modelId === settings.modelId ? settings.xaiModelId : '',
           prompt,
           targetCount: turn.candidates,
           // Edits keep the picture's own framing
@@ -165,31 +175,37 @@ export function useEditStudio({ settings, references, onResult }: Options) {
         }
 
         let firstResult = true
-        const finished = await run.start(
-          keys,
-          runSettings,
-          [await imageToReference(source.image), ...extras.map(({ base64, mimeType }) => ({ base64, mimeType }))],
-          (image) => {
-            // Numbered outside the state updater so StrictMode's double call
-            // can't skip a number or add the picture to the gallery twice
-            const number = versionCounters.current[sessionId] ?? 1
-            versionCounters.current[sessionId] = number + 1
-            const tagged: GeneratedImage = { ...image, edit: { sessionId, version: number, prompt: turn.prompt } }
-            const version: EditVersion = { id: crypto.randomUUID(), number, image: tagged, turnId: turn.id }
-            // The first result becomes the new base so the next edit chains on it
-            const select = firstResult
-            firstResult = false
-            onResult(tagged)
-            patchSession(sessionId, (s) => ({
-              ...s,
-              versions: [...s.versions, version],
-              turns: s.turns.map((t) =>
-                t.id === turn.id ? { ...t, resultVersionIds: [...t.resultVersionIds, version.id] } : t,
-              ),
-              selectedVersionId: select ? version.id : s.selectedVersionId,
-            }))
-          },
-        )
+        let delivered = 0
+        const prepareSources = async () => {
+          const sources = [
+            await imageToReference(source.image),
+            ...extras.map(({ base64, mimeType }) => ({ base64, mimeType })),
+          ]
+          if (cancelledRef.current) throw new StoppedBeforeStart()
+          setPreparing(false)
+          return sources
+        }
+        const finished = await run.start(keys, runSettings, await prepareSources(), (image) => {
+          // Numbered outside the state updater so StrictMode's double call
+          // can't skip a number or add the picture to the gallery twice
+          const number = versionCounters.current[sessionId] ?? 1
+          versionCounters.current[sessionId] = number + 1
+          const tagged: GeneratedImage = { ...image, edit: { sessionId, version: number, prompt: turn.prompt } }
+          const version: EditVersion = { id: crypto.randomUUID(), number, image: tagged, turnId: turn.id }
+          // The first result becomes the new base so the next edit chains on it
+          delivered += 1
+          const select = firstResult
+          firstResult = false
+          onResult(tagged)
+          patchSession(sessionId, (s) => ({
+            ...s,
+            versions: [...s.versions, version],
+            turns: s.turns.map((t) =>
+              t.id === turn.id ? { ...t, resultVersionIds: [...t.resultVersionIds, version.id] } : t,
+            ),
+            selectedVersionId: select ? version.id : s.selectedVersionId,
+          }))
+        })
 
         if (!finished) {
           finishTurn({ status: 'error', errorMessage: 'Another edit was already running.' })
@@ -200,12 +216,19 @@ export function useEditStudio({ settings, references, onResult }: Options) {
           attempts: finished.attempts,
           lastFailure: finished.lastFailure,
           errorMessage: finished.errorMessage ?? null,
+          // An answer that could not be decoded still counts as collected in
+          // the engine; with nothing to show, report it rather than "done"
+          ...(finished.result === 'complete' && delivered === 0
+            ? { status: 'error' as const, errorMessage: 'The model answered, but the picture could not be decoded.' }
+            : {}),
         })
       } catch (err) {
+        if (err instanceof StoppedBeforeStart) finishTurn({ status: 'stopped' })
         // e.g. the source picture could not be read back for upload
-        finishTurn({ status: 'error', errorMessage: err instanceof Error ? err.message : String(err) })
+        else finishTurn({ status: 'error', errorMessage: err instanceof Error ? err.message : String(err) })
       } finally {
         busyRef.current = false
+        setPreparing(false)
         setRunningTurn(null)
       }
     },
@@ -215,7 +238,7 @@ export function useEditStudio({ settings, references, onResult }: Options) {
   const submit = useCallback(
     (sessionId: string, request: EditRequest) => {
       const session = sessions[sessionId]
-      if (!session || run.isRunning || !request.prompt.trim()) return
+      if (!session || busy || !request.prompt.trim()) return
       void runTurn(sessionId, {
         id: crypto.randomUUID(),
         prompt: request.prompt.trim(),
@@ -230,7 +253,7 @@ export function useEditStudio({ settings, references, onResult }: Options) {
         errorMessage: null,
       })
     },
-    [sessions, run.isRunning, runTurn],
+    [sessions, busy, runTurn],
   )
 
   // Runs a finished turn again from the same source — same prompt, fresh
@@ -238,7 +261,7 @@ export function useEditStudio({ settings, references, onResult }: Options) {
   const retry = useCallback(
     (sessionId: string, turnId: string) => {
       const turn = sessions[sessionId]?.turns.find((t) => t.id === turnId)
-      if (!turn || run.isRunning) return
+      if (!turn || busy) return
       void runTurn(sessionId, {
         ...turn,
         id: crypto.randomUUID(),
@@ -249,8 +272,15 @@ export function useEditStudio({ settings, references, onResult }: Options) {
         errorMessage: null,
       })
     },
-    [sessions, run.isRunning, runTurn],
+    [sessions, busy, runTurn],
   )
+
+  // A stop during preparation is honoured once the upload data is ready,
+  // before anything is sent; afterwards it aborts the engine as usual
+  const stop = useCallback(() => {
+    cancelledRef.current = true
+    run.stop()
+  }, [run])
 
   const openSession = openSessionId ? (sessions[openSessionId] ?? null) : null
 
@@ -263,9 +293,10 @@ export function useEditStudio({ settings, references, onResult }: Options) {
       selectVersion,
       submit,
       retry,
-      stop: run.stop,
-      runState: run.runState,
-      isRunning: run.isRunning,
+      stop,
+      // While preparing, the engine's state still belongs to the last run
+      runState: preparing ? null : run.runState,
+      isRunning: busy,
       runningTurn,
     }),
     [
@@ -276,9 +307,10 @@ export function useEditStudio({ settings, references, onResult }: Options) {
       selectVersion,
       submit,
       retry,
-      run.stop,
+      stop,
+      preparing,
       run.runState,
-      run.isRunning,
+      busy,
       runningTurn,
     ],
   )
@@ -287,4 +319,10 @@ export function useEditStudio({ settings, references, onResult }: Options) {
 function missingKeyMessage(provider: string): string {
   const name = provider === 'xai' ? 'xAI' : provider === 'openai' ? 'OpenAI' : 'Google AI Studio'
   return `No ${name} API key saved yet — add one in the settings panel, then try again.`
+}
+
+class StoppedBeforeStart extends Error {
+  constructor() {
+    super('Stopped before the edit was sent')
+  }
 }

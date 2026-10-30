@@ -183,7 +183,7 @@ function App() {
           className="soft-shadow fixed bottom-5 left-1/2 z-30 flex -translate-x-1/2 items-center gap-2 rounded-full border border-zinc-700 bg-zinc-900 px-4 py-2 text-xs text-zinc-200 hover:border-blue-500"
         >
           <span className="h-2 w-2 animate-pulse rounded-full bg-blue-400" />
-          Edit in progress · try {studio.runState.attempts + 1} — open studio
+          Edit in progress{studio.runState ? ` · try ${studio.runState.attempts + 1}` : ''} — open studio
         </button>
       )}
       <RunSettingsPanel
