@@ -8,6 +8,8 @@ import { SyncSection } from './SyncSection'
 import { MaxAttemptsControl } from './MaxAttemptsControl'
 import type { usePromptFileSync } from '../../hooks/usePromptFileSync'
 import { ExpandableTextarea } from '../common/ExpandableTextarea'
+import { CloudSection } from '../cloud/CloudSection'
+import { useCloudStatus } from '../../lib/cloud'
 
 interface Props {
   settings: Settings
@@ -49,22 +51,29 @@ export function RunSettingsPanel({ settings, onUpdate, apiKeys, onApiKeyChange, 
   // Non-Gemini providers get a typed-ID escape hatch and account model discovery
   const hasOverride = model.provider !== 'gemini'
   const [advancedOpen, setAdvancedOpen] = useState(false)
+  const cloud = useCloudStatus()
 
   return (
     <aside className="flex h-full w-[22rem] shrink-0 flex-col gap-3 overflow-y-auto border-l border-zinc-800 bg-zinc-950 p-4">
       <h2 className="px-1 text-sm font-semibold text-zinc-200">Settings</h2>
 
-      <Section icon="💾" title="Save to a file">
-        <SyncSection
-          status={sync.status}
-          onConnectNew={() => void sync.connectNew()}
-          onConnectExisting={() => void sync.connectExisting()}
-          onGrantPermission={() => void sync.grantPermission()}
-          onDisconnect={() => void sync.disconnect()}
-          onPull={() => void sync.pullNow()}
-          disabled={disabled}
-        />
-      </Section>
+      {cloud.state !== 'off' ? (
+        <Section icon="☁️" title="Cloud sync">
+          <CloudSection />
+        </Section>
+      ) : (
+        <Section icon="💾" title="Save to a file">
+          <SyncSection
+            status={sync.status}
+            onConnectNew={() => void sync.connectNew()}
+            onConnectExisting={() => void sync.connectExisting()}
+            onGrantPermission={() => void sync.grantPermission()}
+            onDisconnect={() => void sync.disconnect()}
+            onPull={() => void sync.pullNow()}
+            disabled={disabled}
+          />
+        </Section>
+      )}
 
       <Section icon="🎨" title="Model">
         <Field label="Model">
