@@ -79,7 +79,11 @@ export async function checkPermission(handle: SyncFileHandle, request: boolean):
 
 export async function readPayload(handle: SyncFileHandle): Promise<PromptFilePayload | null> {
   const file = await handle.getFile()
-  const text = await file.text()
+  return parsePayloadText(await file.text())
+}
+
+// Also used by the cloud "import a saved file" button
+export function parsePayloadText(text: string): PromptFilePayload | null {
   if (!text.trim()) return null
   const parsed = JSON.parse(text) as PromptFilePayload
   if (!parsed || typeof parsed !== 'object' || !parsed.workspace || !Array.isArray(parsed.workspace.modules)) {

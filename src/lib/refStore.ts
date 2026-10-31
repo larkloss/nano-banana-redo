@@ -42,7 +42,16 @@ export async function loadStoredReferences(slot: string): Promise<StoredReferenc
   }
 }
 
-export async function saveStoredReferences(slot: string, refs: StoredReference[]): Promise<void> {
+// The cloud sync layer listens here so reference photos follow the other
+// settings. Writes made by the sync layer itself pass notify = false.
+let changeListener: ((slot: string, refs: StoredReference[]) => void) | null = null
+
+export function onStoredReferencesChange(listener: (slot: string, refs: StoredReference[]) => void): void {
+  changeListener = listener
+}
+
+export async function saveStoredReferences(slot: string, refs: StoredReference[], notify = true): Promise<void> {
+  if (notify) changeListener?.(slot, refs)
   try {
     const db = await openDb()
     await new Promise<void>((resolve) => {

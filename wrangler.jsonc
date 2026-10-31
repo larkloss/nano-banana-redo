@@ -1,0 +1,28 @@
+// Cloud deployment: one Cloudflare Worker (free plan) that
+//   - asks for a password before serving anything,
+//   - serves the three single-file apps as static assets,
+//   - keeps the synced settings/prompts/reference photos in a Durable Object.
+// API keys never reach it — they stay in each browser's localStorage.
+// See DEPLOY.md for the one-time setup.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "nano-banana-studio",
+  "main": "worker/index.ts",
+  "compatibility_date": "2025-09-01",
+  // Copies the committed single-file builds into ./site before every deploy
+  "build": { "command": "node scripts/prepare-site.mjs" },
+  "assets": {
+    "directory": "./site",
+    "binding": "ASSETS",
+    // Every request goes through the password check first, assets included
+    "run_worker_first": true,
+    "html_handling": "auto-trailing-slash",
+    "not_found_handling": "none"
+  },
+  "durable_objects": {
+    "bindings": [{ "name": "SYNC", "class_name": "SyncStore" }]
+  },
+  // SQLite-backed Durable Objects are what the free plan allows
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["SyncStore"] }],
+  "observability": { "enabled": true }
+}
