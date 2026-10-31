@@ -23,8 +23,11 @@ export interface Env {
 const COOKIE = 'nbr_session'
 const SESSION_DAYS = 30
 const MIN_PASSWORD_LENGTH = 8
-// Login lockout: this many wrong passwords from one IP within the window
+// Login lockout. Every attempt counts until one succeeds: this many from one
+// network (an IPv4 address, or an IPv6 /64) within the window locks it, and a
+// global ceiling stops guessing spread across many addresses.
 const MAX_FAILURES = 10
+const GLOBAL_MAX_FAILURES = 100
 const FAILURE_WINDOW_MS = 15 * 60 * 1000
 
 // What the store accepts. App data uses the apps' own localStorage names;
@@ -32,18 +35,29 @@ const FAILURE_WINDOW_MS = 15 * 60 * 1000
 const KEY_PATTERN = /^(?:nbr\.[A-Za-z0-9._-]{1,80}|refs:[A-Za-z0-9_-]{1,40})$/
 const SECRET_KEY_PATTERN = /api.?key/i
 const BLOB_ID_PATTERN = /^[A-Za-z0-9_-]{1,80}$/
-// Durable Object values max out at 2 MiB; stay well under it
-const MAX_VALUE_CHARS = 1_500_000
+// Durable Object values max out at 2 MiB. Strings with non-Latin text are
+// stored at two bytes per character, so the cap is in characters at that rate.
+const MAX_VALUE_CHARS = 900_000
 const BLOB_CHUNK_BYTES = 1024 * 1024
-const MAX_BLOB_BYTES = 40 * 1024 * 1024
+// Well under the 32 MiB limit on a Durable Object call; the client re-encodes
+// bigger photos before uploading
+const MAX_BLOB_BYTES = 12 * 1024 * 1024
 // An uploaded photo isn't collected until it has had time to be listed —
 // the client uploads first, then pushes the list that references it
 const BLOB_GRACE_MS = 60 * 60 * 1000
 
+const FILE_NAME_ALIASES: Record<string, string> = {
+  '/nano-banana.html': '/',
+  '/nano-banana-edit.html': '/edit',
+  '/nano-banana-video.html': '/video',
+}
+
 const SECURITY_HEADERS: Record<string, string> = {
   'X-Frame-Options': 'DENY',
   'X-Content-Type-Options': 'nosniff',
-  'Referrer-Policy': 'no-referrer',
+  // same-origin, not no-referrer: with no-referrer browsers send "Origin: null"
+  // on the login form, which the same-site check would then refuse
+  'Referrer-Policy': 'same-origin',
   'X-Robots-Tag': 'noindex, nofollow',
   'Strict-Transport-Security': 'max-age=31536000',
 }
@@ -69,12 +83,17 @@ async function route(request: Request, env: Env): Promise<Response> {
   const authed = await hasValidSession(request, key)
 
   if (url.pathname === '/login') {
-    if (request.method === 'POST') return login(request, env, password, key)
-    if (authed) return redirect(safeNext(url.searchParams.get('next')))
-    return loginPage({ next: safeNext(url.searchParams.get('next')), error: url.searchParams.get('e') })
+    if (request.method === 'POST') {
+      if (!isSameOriginPost(request, url)) return messagePage('Blocked', 'That request came from another site.', 403)
+      return login(request, env, password, key, url)
+    }
+    const next = safeNext(url.searchParams.get('next'), url.origin)
+    if (authed) return redirect(next)
+    return loginPage({ next, error: url.searchParams.get('e') })
   }
   if (url.pathname === '/logout') {
     if (request.method !== 'POST') return new Response('Method not allowed', { status: 405 })
+    if (!isSameOriginPost(request, url)) return messagePage('Blocked', 'That request came from another site.', 403)
     return redirect('/login', { 'Set-Cookie': `${COOKIE}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Strict` })
   }
 
@@ -87,6 +106,10 @@ async function route(request: Request, env: Env): Promise<Response> {
     if (request.method !== 'GET' && request.method !== 'HEAD') return new Response('Unauthorized', { status: 401 })
     return redirect(`/login?next=${encodeURIComponent(url.pathname + url.search)}`)
   }
+  // The names the files have on disk work too (e.g. from an old bookmark)
+  const alias = FILE_NAME_ALIASES[url.pathname]
+  if (alias) return redirect(alias + url.search)
+
   // Revalidated on every load (so the password check always runs) but a
   // 304 keeps it cheap; never stored by shared caches
   const asset = await env.ASSETS.fetch(request)
@@ -99,24 +122,25 @@ async function route(request: Request, env: Env): Promise<Response> {
 // Sessions and login
 // ---------------------------------------------------------------------------
 
-async function login(request: Request, env: Env, password: string, key: CryptoKey): Promise<Response> {
+async function login(request: Request, env: Env, password: string, key: CryptoKey, url: URL): Promise<Response> {
   const form = await request.formData().catch(() => null)
-  const next = safeNext(typeof form?.get('next') === 'string' ? (form.get('next') as string) : null)
+  const next = safeNext(typeof form?.get('next') === 'string' ? (form.get('next') as string) : null, url.origin)
   const attempt = typeof form?.get('password') === 'string' ? (form.get('password') as string) : ''
-  const ip = request.headers.get('CF-Connecting-IP') ?? 'unknown'
+  const bucket = networkBucket(request.headers.get('CF-Connecting-IP') ?? 'unknown')
   const store = syncStore(env)
 
-  const gate = await store.loginGate(ip, Date.now())
+  // Counted before the password is even compared, in one atomic step, so a
+  // burst of parallel guesses can't all slip past the limit
+  const gate = await store.loginAttempt(bucket, Date.now())
   if (!gate.allowed) return redirect(`/login?e=locked&next=${encodeURIComponent(next)}`)
 
   if (!(await passwordsMatch(attempt, password))) {
-    await store.loginFailed(ip, Date.now())
     // A little friction for guessing scripts; harmless for a typo
     await new Promise((resolve) => setTimeout(resolve, 600))
     return redirect(`/login?e=wrong&next=${encodeURIComponent(next)}`)
   }
 
-  await store.loginSucceeded(ip)
+  await store.loginSucceeded(bucket)
   const expires = Date.now() + SESSION_DAYS * 24 * 60 * 60 * 1000
   const token = `${expires}.${await sign(key, `session:${expires}`)}`
   return redirect(next, {
@@ -159,11 +183,43 @@ function constantTimeEqual(a: string, b: string): boolean {
   return crypto.subtle.timingSafeEqual(x, y)
 }
 
-// Only same-site paths — never an absolute or protocol-relative URL
-function safeNext(next: string | null): string {
-  if (!next || !next.startsWith('/') || next.startsWith('//') || next.startsWith('/\\')) return '/'
-  if (next.startsWith('/login') || next.startsWith('/logout')) return '/'
-  return next
+// Only same-site paths. Checks the URL the browser will actually resolve —
+// browsers drop tabs/newlines and read "\\" as "/", so a raw prefix check
+// can be fooled into a protocol-relative redirect
+function safeNext(next: string | null, origin: string): string {
+  // eslint-disable-next-line no-control-regex -- rejecting control characters is the point
+  if (!next || !next.startsWith('/') || /[\x00-\x20\x7f\\]/.test(next)) return '/'
+  let resolved: URL
+  try {
+    resolved = new URL(next, origin)
+  } catch {
+    return '/'
+  }
+  if (resolved.origin !== origin) return '/'
+  if (resolved.pathname.startsWith('/login') || resolved.pathname.startsWith('/logout')) return '/'
+  return resolved.pathname + resolved.search + resolved.hash
+}
+
+// Login/logout forms may only be submitted by this site's own pages, so
+// another site can't sign the owner out or burn their lockout budget
+function isSameOriginPost(request: Request, url: URL): boolean {
+  const site = request.headers.get('Sec-Fetch-Site')
+  if (site !== null && site !== 'same-origin' && site !== 'none') return false
+  const origin = request.headers.get('Origin')
+  return origin === null || origin === url.origin
+}
+
+// IPv6 users (and attackers) get a whole /64; lock that, not one address
+function networkBucket(ip: string): string {
+  if (!ip.includes(':')) return ip
+  const [head, tail = ''] = ip.split('::')
+  const left = head ? head.split(':') : []
+  const right = tail ? tail.split(':') : []
+  const groups = ip.includes('::') ? [...left, ...Array(8 - left.length - right.length).fill('0'), ...right] : left
+  return `${groups
+    .slice(0, 4)
+    .map((g) => g.toLowerCase().replace(/^0+(?=.)/, ''))
+    .join(':')}::/64`
 }
 
 // ---------------------------------------------------------------------------
@@ -190,8 +246,8 @@ async function api(request: Request, env: Env, url: URL): Promise<Response> {
     const body = (await request.json().catch(() => null)) as PushBody | null
     const problem = validatePush(body)
     if (problem) return json({ error: problem }, 400)
-    const result = await store.push(body!.changes, body!.force === true, Date.now())
-    return json(result, result.ok ? 200 : 409)
+    const result = await store.push(body!.changes, Date.now())
+    return json(result, result.ok ? 200 : 'missingBlobs' in result ? 422 : 409)
   }
 
   const blobMatch = url.pathname.match(/^\/api\/blob\/([^/]+)$/)
@@ -219,10 +275,11 @@ async function api(request: Request, env: Env, url: URL): Promise<Response> {
 interface PushChange {
   value: string | null
   base: number
+  // Overwrite whatever is there (the user chose "keep this one" / imported)
+  force?: boolean
 }
 interface PushBody {
   changes: Record<string, PushChange>
-  force?: boolean
 }
 
 function validatePush(body: PushBody | null): string | null {
@@ -236,6 +293,8 @@ function validatePush(body: PushBody | null): string | null {
     if (!change || typeof change !== 'object' || typeof change.base !== 'number') return `bad change ${name}`
     if (change.value !== null && typeof change.value !== 'string') return `bad value ${name}`
     if (typeof change.value === 'string' && change.value.length > MAX_VALUE_CHARS) return `${name} is too large`
+    if (change.force !== undefined && typeof change.force !== 'boolean') return `bad change ${name}`
+    if (name.startsWith('refs:') && refIds(change.value) === null) return `bad photo list ${name}`
   }
   return null
 }
@@ -265,6 +324,9 @@ interface BlobMeta {
 export type PushResult =
   | { ok: true; versions: Record<string, number> }
   | { ok: false; conflicts: Record<string, StoredValue> }
+  // A photo list names photos the store doesn't have (never uploaded, or
+  // already collected) — the client re-uploads them and tries again
+  | { ok: false; missingBlobs: string[] }
 
 export class SyncStore extends DurableObject<Env> {
   async snapshot(): Promise<{ keys: Record<string, StoredValue> }> {
@@ -277,12 +339,13 @@ export class SyncStore extends DurableObject<Env> {
   // Per-key optimistic concurrency: a change applies only if the client saw
   // the current version of that key. Otherwise nothing is written and the
   // current values come back so the client can show the conflict.
-  async push(changes: Record<string, PushChange>, force: boolean, now: number): Promise<PushResult> {
+  async push(changes: Record<string, PushChange>, now: number): Promise<PushResult> {
     const names = Object.keys(changes)
     const current = await this.ctx.storage.get<StoredValue>(names.map((n) => `k:${n}`))
-    if (!force) {
+    {
       const conflicts: Record<string, StoredValue> = {}
       for (const name of names) {
+        if (changes[name].force) continue
         const existing = current.get(`k:${name}`)
         // Writing what's already there is never a conflict (two devices
         // saving the same normalised settings, a retried push, …)
@@ -292,6 +355,17 @@ export class SyncStore extends DurableObject<Env> {
         }
       }
       if (Object.keys(conflicts).length > 0) return { ok: false, conflicts }
+    }
+
+    // Never accept a photo list that points at photos this store lacks
+    const listed = new Set<string>()
+    for (const name of names) {
+      if (name.startsWith('refs:')) (refIds(changes[name].value) ?? []).forEach((id) => listed.add(id))
+    }
+    if (listed.size > 0) {
+      const metas = await this.ctx.storage.get<BlobMeta>([...listed].map((id) => `bm:${id}`))
+      const missing = [...listed].filter((id) => !metas.has(`bm:${id}`))
+      if (missing.length > 0) return { ok: false, missingBlobs: missing }
     }
 
     const counter = ((await this.ctx.storage.get<number>('meta:counter')) ?? 0) + 1
@@ -338,15 +412,10 @@ export class SyncStore extends DurableObject<Env> {
     const lists = await this.ctx.storage.list<StoredValue>({ prefix: 'k:refs:' })
     const referenced = new Set<string>()
     for (const [, stored] of lists) {
-      if (!stored.value) continue
-      try {
-        for (const item of JSON.parse(stored.value) as { id?: unknown }[]) {
-          if (typeof item?.id === 'string') referenced.add(item.id)
-        }
-      } catch {
-        // a malformed list keeps everything — never delete on doubt
-        return
-      }
+      const ids = refIds(stored.value)
+      // a malformed list keeps everything — never delete on doubt
+      if (ids === null) return
+      ids.forEach((id) => referenced.add(id))
     }
     const metas = await this.ctx.storage.list<BlobMeta>({ prefix: 'bm:' })
     for (const [k, meta] of metas) {
@@ -364,27 +433,46 @@ export class SyncStore extends DurableObject<Env> {
 
   // --- login lockout, per client IP ---------------------------------------
 
-  async loginGate(ip: string, now: number): Promise<{ allowed: boolean }> {
-    const record = await this.ctx.storage.get<{ count: number; since: number }>(`fail:${ip}`)
-    if (!record || now - record.since > FAILURE_WINDOW_MS) return { allowed: true }
-    return { allowed: record.count < MAX_FAILURES }
+  // Counts the attempt and decides in one call. A Durable Object runs a
+  // storage-only method like this to completion before the next request,
+  // so concurrent attempts are serialised.
+  async loginAttempt(bucket: string, now: number): Promise<{ allowed: boolean }> {
+    const keys = [`fail:${bucket}`, 'fail:*']
+    const records = await this.ctx.storage.get<{ count: number; since: number }>(keys)
+    const live = (k: string) => {
+      const r = records.get(k)
+      return r && now - r.since <= FAILURE_WINDOW_MS ? r : { count: 0, since: now }
+    }
+    const mine = live(keys[0])
+    const all = live(keys[1])
+    if (mine.count >= MAX_FAILURES || all.count >= GLOBAL_MAX_FAILURES) return { allowed: false }
+    await this.ctx.storage.put({
+      [keys[0]]: { count: mine.count + 1, since: mine.since },
+      [keys[1]]: { count: all.count + 1, since: all.since },
+    })
+    return { allowed: true }
   }
 
-  async loginFailed(ip: string, now: number): Promise<void> {
-    const key = `fail:${ip}`
-    const record = await this.ctx.storage.get<{ count: number; since: number }>(key)
-    const fresh = !record || now - record.since > FAILURE_WINDOW_MS
-    await this.ctx.storage.put(key, fresh ? { count: 1, since: now } : { count: record.count + 1, since: record.since })
-  }
-
-  async loginSucceeded(ip: string): Promise<void> {
-    await this.ctx.storage.delete(`fail:${ip}`)
+  async loginSucceeded(bucket: string): Promise<void> {
+    await this.ctx.storage.delete(`fail:${bucket}`)
   }
 }
 
 // ---------------------------------------------------------------------------
 // Response helpers
 // ---------------------------------------------------------------------------
+
+// Ids in a stored photo list; null when the list can't be read
+function refIds(value: string | null): string[] | null {
+  if (!value) return []
+  try {
+    const parsed = JSON.parse(value) as { id?: unknown }[]
+    if (!Array.isArray(parsed)) return null
+    return parsed.map((item) => item?.id).filter((id): id is string => typeof id === 'string')
+  } catch {
+    return null
+  }
+}
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {

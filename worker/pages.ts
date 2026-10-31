@@ -35,11 +35,11 @@ const STYLE = `
 
 const ERRORS: Record<string, string> = {
   wrong: 'That password isn’t right. Try again.',
-  locked: 'Too many wrong tries from this network. Wait 15 minutes, then try again.',
+  locked: 'Too many wrong tries recently. Wait 15 minutes, then try again.',
 }
 
 export function loginPage({ next, error }: { next: string; error: string | null }): Response {
-  const message = error ? ERRORS[error] : undefined
+  const message = error && Object.hasOwn(ERRORS, error) ? ERRORS[error] : undefined
   return html(
     200,
     `<form class="card" method="post" action="/login">

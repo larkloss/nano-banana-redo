@@ -24,5 +24,9 @@
   },
   // SQLite-backed Durable Objects are what the free plan allows
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["SyncStore"] }],
-  "observability": { "enabled": true }
+  "observability": { "enabled": true },
+  // Workers Builds runs a preview build for pushes to non-production
+  // branches and needs this block. Empty on purpose: a preview has no
+  // password secret, so it only ever shows "Not set up yet".
+  "previews": {}
 }
