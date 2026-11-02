@@ -4,6 +4,9 @@ import type { EditRequest, EditSession, EditTurn, EditVersion } from '../../hook
 import { MODELS, PROVIDER_LABELS, PROVIDER_ORDER, getModel } from '../../lib/models'
 import { downloadBlob, makeFilename } from '../../lib/imageUtils'
 import { friendlyReason } from '../../lib/friendly'
+import { MAX_MARKS, markColor, type EditMark } from '../../lib/annotate'
+import { MarkedImage } from './MarkedImage'
+import { MarkList } from './MarkList'
 
 interface Props {
   session: EditSession
@@ -49,6 +52,10 @@ export function EditStudio({
     getModel(settings.modelId).output === 'image' ? settings.modelId : IMAGE_MODELS[0].id,
   )
   const [comparing, setComparing] = useState(false)
+  // Arrows pointed at the picture, each with its own instruction. Positions
+  // are relative, so they survive switching between versions of the picture.
+  const [marks, setMarks] = useState<EditMark[]>([])
+  const [activeMark, setActiveMark] = useState<string | null>(null)
   const threadEnd = useRef<HTMLDivElement>(null)
 
   const selected = session.versions.find((v) => v.id === session.selectedVersionId) ?? session.versions[0]
@@ -57,7 +64,8 @@ export function EditStudio({
   const shown = comparing && previous ? previous : selected
   const busyHere = isRunning && runningTurn?.sessionId === session.id
   const busyElsewhere = isRunning && !busyHere
-  const canSend = !isRunning && prompt.trim().length > 0
+  const marksReady = marks.every((m) => m.text.trim().length > 0)
+  const canSend = !isRunning && marksReady && (prompt.trim().length > 0 || marks.length > 0)
 
   useEffect(() => {
     threadEnd.current?.scrollIntoView({ block: 'end', behavior: 'smooth' })
@@ -73,8 +81,23 @@ export function EditStudio({
 
   const send = () => {
     if (!canSend) return
-    onSubmit({ prompt, candidates, withReferences: withReferences && referenceCount > 0, modelId })
+    onSubmit({ prompt, marks, candidates, withReferences: withReferences && referenceCount > 0, modelId })
     setPrompt('')
+    setMarks([])
+    setActiveMark(null)
+  }
+
+  const addMark = (x: number, y: number) => {
+    if (marks.length >= MAX_MARKS) return
+    const mark: EditMark = { id: crypto.randomUUID(), x, y, text: '' }
+    setMarks((prev) => [...prev, mark])
+    setActiveMark(mark.id)
+  }
+  const updateMark = (id: string, patch: Partial<EditMark>) =>
+    setMarks((prev) => prev.map((m) => (m.id === id ? { ...m, ...patch } : m)))
+  const removeMark = (id: string) => {
+    setMarks((prev) => prev.filter((m) => m.id !== id))
+    setActiveMark((current) => (current === id ? null : current))
   }
 
   return (
@@ -134,11 +157,25 @@ export function EditStudio({
           {/* Stage: the version on screen, plus the strip of every version */}
           <section className="flex min-h-0 flex-col gap-3 p-4">
             <div className="relative flex min-h-[240px] flex-1 items-center justify-center overflow-hidden rounded-2xl bg-zinc-900">
-              <img
+              <MarkedImage
                 src={shown.image.objectUrl}
                 alt={versionLabel(shown)}
-                className="max-h-full max-w-full object-contain"
+                marks={marks}
+                activeId={activeMark}
+                interactive={!comparing}
+                onAdd={addMark}
+                onMove={(id, x, y) => updateMark(id, { x, y })}
+                onActivate={setActiveMark}
               />
+              {!comparing && (
+                <span className="pointer-events-none absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full bg-black/60 px-3 py-1 text-[11px] text-white">
+                  {marks.length === 0
+                    ? '👆 Click the picture to point at what to change'
+                    : marks.length >= MAX_MARKS
+                      ? `That's ${MAX_MARKS} arrows — the most one edit takes`
+                      : 'Click again for another spot · drag an arrow to adjust it'}
+                </span>
+              )}
               <span className="absolute left-3 top-3 rounded-full bg-black/60 px-2.5 py-1 text-[11px] font-medium text-white">
                 {comparing && previous ? `Before · ${versionLabel(previous)}` : versionLabel(selected)}
               </span>
@@ -199,7 +236,10 @@ export function EditStudio({
                 <div className="rounded-2xl bg-zinc-900 p-4 text-xs leading-relaxed text-zinc-400">
                   <p className="mb-2 font-medium text-zinc-200">How it works</p>
                   <ol className="list-decimal space-y-1 pl-4">
-                    <li>Say what to change — one thing per turn works best.</li>
+                    <li>
+                      Say what to change, or click the picture to point arrows at exact spots and give each its own
+                      instruction (“1: remove this”, “2: change the pose”).
+                    </li>
                     <li>If the model refuses, it quietly tries again until a picture comes out.</li>
                     <li>The result becomes the next version; keep refining from there.</li>
                     <li>Click any version below the picture to branch from it instead.</li>
@@ -244,6 +284,16 @@ export function EditStudio({
                 )}
               </div>
               <div className="rounded-2xl border border-zinc-700 bg-zinc-900 focus-within:border-blue-500">
+                {marks.length > 0 && (
+                  <MarkList
+                    marks={marks}
+                    activeId={activeMark}
+                    onActivate={setActiveMark}
+                    onChange={(id, text) => updateMark(id, { text })}
+                    onRemove={removeMark}
+                    onSubmit={send}
+                  />
+                )}
                 <textarea
                   value={prompt}
                   onChange={(e) => setPrompt(e.target.value)}
@@ -253,8 +303,12 @@ export function EditStudio({
                       send()
                     }
                   }}
-                  rows={3}
-                  placeholder="What should change? e.g. “Make her hair a little longer”"
+                  rows={marks.length > 0 ? 2 : 3}
+                  placeholder={
+                    marks.length > 0
+                      ? 'Anything else, for the whole picture? (optional)'
+                      : 'What should change? Or click the picture to point at a spot. e.g. “Make her hair a little longer”'
+                  }
                   className="block w-full resize-none rounded-2xl bg-transparent px-3.5 pt-3 text-sm leading-relaxed text-zinc-200 placeholder-zinc-600 outline-none"
                 />
                 <div className="flex flex-wrap items-center gap-2 px-2.5 pb-2.5">
@@ -315,7 +369,9 @@ export function EditStudio({
                 </div>
               </div>
               <p className="mt-1.5 text-[10px] text-zinc-600">
-                Enter to send · Shift+Enter for a new line · up to {settings.attemptsCap} tries per edit (Max attempts)
+                {marks.length > 0 && !marksReady
+                  ? 'Say what to do at each numbered arrow, then send'
+                  : `Enter to send · Shift+Enter for a new line · up to ${settings.attemptsCap} tries per edit (Max attempts)`}
               </p>
             </div>
           </section>
@@ -357,7 +413,29 @@ function TurnView({
       {/* The instruction, as a chat bubble */}
       <div className="flex justify-end">
         <div className="max-w-[90%] rounded-2xl rounded-br-md bg-blue-600 px-3.5 py-2 text-sm text-white">
-          <p className="whitespace-pre-wrap">{turn.prompt}</p>
+          {turn.guideUrl && (
+            <img
+              src={turn.guideUrl}
+              alt="Where each change goes"
+              className="mb-2 max-h-40 rounded-xl border border-white/20"
+            />
+          )}
+          {turn.marks.length > 0 && (
+            <ol className="mb-1 space-y-0.5">
+              {turn.marks.map((mark, i) => (
+                <li key={mark.id} className="flex gap-1.5">
+                  <span
+                    className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[10px] font-bold text-white ring-1 ring-white/70"
+                    style={{ backgroundColor: markColor(i).css }}
+                  >
+                    {i + 1}
+                  </span>
+                  <span>{mark.text}</span>
+                </li>
+              ))}
+            </ol>
+          )}
+          {turn.prompt && <p className="whitespace-pre-wrap">{turn.prompt}</p>}
           <p className="mt-1 text-[10px] text-white/70">
             on {source ? versionLabel(source) : 'a removed version'} · {getModel(turn.modelId).label}
             {turn.candidates > 1 ? ` · ${turn.candidates} results` : ''}

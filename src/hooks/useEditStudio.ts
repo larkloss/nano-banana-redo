@@ -7,6 +7,7 @@ import { loadApiKeys } from '../lib/storage'
 import { isMockMode } from '../lib/mockGemini'
 import { MAX_XAI_SOURCES } from '../lib/xai'
 import { MAX_OPENAI_SOURCES } from '../lib/openai'
+import { buildEditPrompt, renderGuide, summarizeEdit, type EditMark } from '../lib/annotate'
 
 // One picture's edit history. Version 0 is the picture the chain started
 // from; every successful edit adds a version, and any version can be the
@@ -23,7 +24,12 @@ export type TurnStatus = Exclude<RunStatus, 'idle'>
 
 export interface EditTurn {
   id: string
+  // General instruction; may be empty when the turn has marks
   prompt: string
+  // Spots marked on the picture, each with its own instruction
+  marks: EditMark[]
+  // The marked-up copy that was sent alongside the picture (for display)
+  guideUrl: string | null
   sourceVersionId: string
   withReferences: boolean
   candidates: number
@@ -45,6 +51,7 @@ export interface EditSession {
 
 export interface EditRequest {
   prompt: string
+  marks: EditMark[]
   candidates: number
   withReferences: boolean
   modelId: string
@@ -147,12 +154,10 @@ export function useEditStudio({ settings, references, onResult }: Options) {
           : model.provider === 'openai'
             ? MAX_OPENAI_SOURCES
             : model.maxReferences
-      const extras = turn.withReferences ? references.slice(0, Math.max(0, maxSources - 1)) : []
-      const prompt =
-        extras.length > 0
-          ? `Edit the first image: ${turn.prompt}\n\nThe other images are reference photos of the same character. ` +
-            "Use them only to keep the character's face and likeness consistent; change nothing else that wasn't asked for."
-          : turn.prompt
+      // With marks, the guide image takes the second slot
+      const guideSlots = turn.marks.length > 0 ? 1 : 0
+      const extras = turn.withReferences ? references.slice(0, Math.max(0, maxSources - 1 - guideSlots)) : []
+      const prompt = buildEditPrompt(turn.prompt, turn.marks, extras.length)
 
       busyRef.current = true
       cancelledRef.current = false
@@ -177,8 +182,17 @@ export function useEditStudio({ settings, references, onResult }: Options) {
         let firstResult = true
         let delivered = 0
         const prepareSources = async () => {
+          const guide = turn.marks.length > 0 ? await renderGuide(source.image.blob, turn.marks) : null
+          if (guide) {
+            const guideUrl = URL.createObjectURL(guide.blob)
+            patchSession(sessionId, (s) => ({
+              ...s,
+              turns: s.turns.map((t) => (t.id === turn.id ? { ...t, guideUrl } : t)),
+            }))
+          }
           const sources = [
             await imageToReference(source.image),
+            ...(guide ? [{ base64: guide.base64, mimeType: guide.mimeType }] : []),
             ...extras.map(({ base64, mimeType }) => ({ base64, mimeType })),
           ]
           if (cancelledRef.current) throw new StoppedBeforeStart()
@@ -190,7 +204,10 @@ export function useEditStudio({ settings, references, onResult }: Options) {
           // can't skip a number or add the picture to the gallery twice
           const number = versionCounters.current[sessionId] ?? 1
           versionCounters.current[sessionId] = number + 1
-          const tagged: GeneratedImage = { ...image, edit: { sessionId, version: number, prompt: turn.prompt } }
+          const tagged: GeneratedImage = {
+            ...image,
+            edit: { sessionId, version: number, prompt: summarizeEdit(turn.prompt, turn.marks) },
+          }
           const version: EditVersion = { id: crypto.randomUUID(), number, image: tagged, turnId: turn.id }
           // The first result becomes the new base so the next edit chains on it
           delivered += 1
@@ -238,10 +255,14 @@ export function useEditStudio({ settings, references, onResult }: Options) {
   const submit = useCallback(
     (sessionId: string, request: EditRequest) => {
       const session = sessions[sessionId]
-      if (!session || busy || !request.prompt.trim()) return
+      const marks = request.marks.map((m) => ({ ...m, text: m.text.trim() }))
+      if (!session || busy || marks.some((m) => !m.text)) return
+      if (!request.prompt.trim() && marks.length === 0) return
       void runTurn(sessionId, {
         id: crypto.randomUUID(),
         prompt: request.prompt.trim(),
+        marks,
+        guideUrl: null,
         sourceVersionId: session.selectedVersionId,
         withReferences: request.withReferences,
         candidates: request.candidates,
@@ -265,6 +286,7 @@ export function useEditStudio({ settings, references, onResult }: Options) {
       void runTurn(sessionId, {
         ...turn,
         id: crypto.randomUUID(),
+        guideUrl: null,
         status: 'running',
         resultVersionIds: [],
         attempts: 0,
