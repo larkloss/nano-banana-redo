@@ -11,6 +11,7 @@ export interface RunParams {
   keys: string[]
   settings: Settings
   references: ParsedImagePart[]
+  singleSourcePrompt?: string
 }
 
 type LaneExit = 'done' | 'cap' | 'fatal' | 'stopped'
@@ -35,7 +36,12 @@ export async function runGeneration(
 
   async function worker(lane: number, apiKey: string): Promise<LaneExit> {
     let consecutiveTransient = 0
-    const callParams: GenerateParams = { apiKey, settings: params.settings, references: params.references }
+    const callParams: GenerateParams = {
+      apiKey,
+      settings: params.settings,
+      references: params.references,
+      singleSourcePrompt: params.singleSourcePrompt,
+    }
 
     while (true) {
       if (signal.aborted) return 'stopped'

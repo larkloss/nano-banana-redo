@@ -14,11 +14,26 @@ interface Props {
 }
 
 // The stage picture with the user's numbered arrows on top. Click anywhere to
-// point an arrow at that spot; drag an arrow's tip or number to adjust it.
+// point an arrow at that spot; drag any part of an arrow to move it.
+
+// Pointer travel (px) before a press on an arrow counts as a drag, so a click
+// or a jittery tap selects the arrow instead of nudging it
+const DRAG_THRESHOLD = 4
+
+interface Drag {
+  id: string
+  // Tip position minus the pointer position at the press, so the arrow moves
+  // with the pointer instead of its tip jumping to it
+  dx: number
+  dy: number
+  startX: number
+  startY: number
+  moved: boolean
+}
 export function MarkedImage({ src, alt, marks, activeId, interactive, onAdd, onMove, onActivate }: Props) {
   const imgRef = useRef<HTMLImageElement>(null)
   const [box, setBox] = useState<{ left: number; top: number; width: number; height: number } | null>(null)
-  const dragging = useRef<string | null>(null)
+  const drag = useRef<Drag | null>(null)
 
   // The overlay has to sit exactly on the rendered picture, which moves and
   // resizes with the layout; ResizeObserver also reports once on observe
@@ -29,6 +44,9 @@ export function MarkedImage({ src, alt, marks, activeId, interactive, onAdd, onM
       setBox({ left: img.offsetLeft, top: img.offsetTop, width: img.clientWidth, height: img.clientHeight })
     const observer = new ResizeObserver(measure)
     observer.observe(img)
+    // The picture is centred in the stage: the stage changing size moves it
+    // even when the picture itself keeps its size
+    if (img.parentElement) observer.observe(img.parentElement)
     img.addEventListener('load', measure)
     return () => {
       observer.disconnect()
@@ -36,12 +54,12 @@ export function MarkedImage({ src, alt, marks, activeId, interactive, onAdd, onM
     }
   }, [src])
 
-  const toPicture = (e: React.PointerEvent) => {
-    const rect = (e.currentTarget as SVGSVGElement).getBoundingClientRect()
-    return {
-      x: Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width)),
-      y: Math.min(1, Math.max(0, (e.clientY - rect.top) / rect.height)),
-    }
+  const toPicture = (e: React.PointerEvent, svg: Element) => {
+    const rect = svg.getBoundingClientRect()
+    return { x: (e.clientX - rect.left) / rect.width, y: (e.clientY - rect.top) / rect.height }
+  }
+  const endDrag = () => {
+    drag.current = null
   }
 
   const aspect = box && box.height > 0 ? box.width / box.height : 1
@@ -56,21 +74,26 @@ export function MarkedImage({ src, alt, marks, activeId, interactive, onAdd, onM
           style={{ left: box.left, top: box.top, width: box.width, height: box.height, cursor: 'crosshair' }}
           viewBox={`0 0 ${box.width} ${box.height}`}
           onPointerDown={(e) => {
+            // Only a plain press (left button, finger, pen tip) places arrows
+            if (e.button !== 0) return
             // Keeps the browser from moving focus away from the new row's input
             e.preventDefault()
-            if (dragging.current) return
+            if (drag.current) return
             if (marks.length >= MAX_MARKS) return
-            const p = toPicture(e)
-            onAdd(p.x, p.y)
+            const p = toPicture(e, e.currentTarget)
+            onAdd(clamp01(p.x), clamp01(p.y))
           }}
           onPointerMove={(e) => {
-            if (!dragging.current) return
-            const p = toPicture(e)
-            onMove(dragging.current, p.x, p.y)
+            const d = drag.current
+            if (!d) return
+            if (!d.moved && Math.hypot(e.clientX - d.startX, e.clientY - d.startY) < DRAG_THRESHOLD) return
+            d.moved = true
+            const p = toPicture(e, e.currentTarget)
+            onMove(d.id, clamp01(p.x + d.dx), clamp01(p.y + d.dy))
           }}
-          onPointerUp={() => {
-            dragging.current = null
-          }}
+          onPointerUp={endDrag}
+          onPointerCancel={endDrag}
+          onLostPointerCapture={endDrag}
         >
           {marks.map((mark, i) => {
             const color = markColor(i).css
@@ -84,11 +107,21 @@ export function MarkedImage({ src, alt, marks, activeId, interactive, onAdd, onM
             const tagR = Math.max(10, unit * 0.03)
             const active = mark.id === activeId
             const grab = (e: React.PointerEvent) => {
+              if (e.button !== 0) return
               e.stopPropagation()
               e.preventDefault()
               const svg = (e.currentTarget as SVGGElement).ownerSVGElement
-              svg?.setPointerCapture(e.pointerId)
-              dragging.current = mark.id
+              if (!svg) return
+              svg.setPointerCapture(e.pointerId)
+              const p = toPicture(e, svg)
+              drag.current = {
+                id: mark.id,
+                dx: mark.x - p.x,
+                dy: mark.y - p.y,
+                startX: e.clientX,
+                startY: e.clientY,
+                moved: false,
+              }
               onActivate(mark.id)
             }
             const headPoints = [
@@ -141,4 +174,8 @@ export function MarkedImage({ src, alt, marks, activeId, interactive, onAdd, onM
       )}
     </>
   )
+}
+
+function clamp01(v: number): number {
+  return Math.min(1, Math.max(0, v))
 }

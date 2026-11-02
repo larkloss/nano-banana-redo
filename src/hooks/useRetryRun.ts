@@ -45,6 +45,7 @@ export function useRetryRun() {
       settings: Settings,
       references: ParsedImagePart[],
       onImage: (image: GeneratedImage) => void,
+      options: { singleSourcePrompt?: string } = {},
     ): Promise<FinishedRun | null> => {
       if (runningRef.current || keys.length === 0) return null
       runningRef.current = true
@@ -103,7 +104,12 @@ export function useRetryRun() {
 
       let summary: RunSummary
       try {
-        summary = await runGeneration(pickCaller(settings), { keys, settings, references }, controller.signal, onEvent)
+        summary = await runGeneration(
+          pickCaller(settings),
+          { keys, settings, references, singleSourcePrompt: options.singleSourcePrompt },
+          controller.signal,
+          onEvent,
+        )
       } catch (err) {
         summary = {
           result: 'error',

@@ -4,7 +4,7 @@ import type { EditRequest, EditSession, EditTurn, EditVersion } from '../../hook
 import { MODELS, PROVIDER_LABELS, PROVIDER_ORDER, getModel } from '../../lib/models'
 import { downloadBlob, makeFilename } from '../../lib/imageUtils'
 import { friendlyReason } from '../../lib/friendly'
-import { MAX_MARKS, markColor, type EditMark } from '../../lib/annotate'
+import { MAX_MARKS, markColor, summarizeEdit, type EditMark } from '../../lib/annotate'
 import { MarkedImage } from './MarkedImage'
 import { MarkList } from './MarkList'
 
@@ -57,6 +57,7 @@ export function EditStudio({
   const [marks, setMarks] = useState<EditMark[]>([])
   const [activeMark, setActiveMark] = useState<string | null>(null)
   const threadEnd = useRef<HTMLDivElement>(null)
+  const pressedBackdrop = useRef(false)
 
   const selected = session.versions.find((v) => v.id === session.selectedVersionId) ?? session.versions[0]
   const selectedTurn = session.turns.find((t) => t.id === selected.turnId)
@@ -73,7 +74,12 @@ export function EditStudio({
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !(e.target instanceof HTMLTextAreaElement)) onClose()
+      if (e.key !== 'Escape' || e.isComposing) return
+      // Esc while typing (an arrow's instruction, the prompt) must not close
+      // the studio and throw away what's been marked and written
+      const t = e.target
+      if (t instanceof HTMLTextAreaElement || t instanceof HTMLInputElement) return
+      onClose()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -103,7 +109,14 @@ export function EditStudio({
   return (
     <div
       className="fixed inset-0 z-40 flex items-stretch justify-center bg-black/50 p-3 backdrop-blur-sm md:p-6"
-      onClick={onClose}
+      // Closes only for a click that started on the backdrop — not a press on
+      // the picture that happened to be released outside the dialog
+      onPointerDownCapture={(e) => {
+        pressedBackdrop.current = e.target === e.currentTarget
+      }}
+      onClick={(e) => {
+        if (pressedBackdrop.current && e.target === e.currentTarget) onClose()
+      }}
     >
       <div
         role="dialog"
@@ -544,5 +557,6 @@ function versionLabel(v: EditVersion): string {
 }
 
 function editPrompt(session: EditSession, v: EditVersion): string {
-  return session.turns.find((t) => t.id === v.turnId)?.prompt ?? ''
+  const turn = session.turns.find((t) => t.id === v.turnId)
+  return turn ? summarizeEdit(turn.prompt, turn.marks) : ''
 }

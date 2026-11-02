@@ -193,6 +193,25 @@ export function buildEditPrompt(text: string, marks: EditMark[], referenceCount:
   ].join('\n')
 }
 
+// The same request for when only the picture itself can be sent (no guide
+// image): each spot is described by position alone
+export function buildSingleSourcePrompt(text: string, marks: EditMark[]): string {
+  const general = text.trim()
+  const lines = marks.map(
+    (mark, i) =>
+      `${i + 1} — the thing at ${region(mark.x, mark.y)}, about ${pct(mark.x)} from the left and ` +
+      `${pct(mark.y)} from the top: ${mark.text.trim()}`,
+  )
+  return [
+    'Edit this image. Changes:',
+    ...lines,
+    ...(general ? ['', `Also: ${general}`] : []),
+    '',
+    'Change only what is listed. Keep everything else exactly as it is — the same person, face, outfit, ' +
+      'background, lighting and framing.',
+  ].join('\n')
+}
+
 function describeMark(mark: EditMark, index: number): string {
   const color = markColor(index).name
   return (

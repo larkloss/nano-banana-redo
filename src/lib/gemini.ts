@@ -6,6 +6,10 @@ export interface GenerateParams {
   apiKey: string
   settings: Settings
   references: ParsedImagePart[]
+  // Prompt to use if a provider can only take the first source image (xAI's
+  // single-image fallback). Needed when the prompt talks about the other
+  // images, e.g. the arrow guide of a marked edit.
+  singleSourcePrompt?: string
 }
 
 export type GenerateCaller = (params: GenerateParams, signal: AbortSignal) => Promise<ParsedResponse>

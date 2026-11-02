@@ -7,7 +7,7 @@ import { loadApiKeys } from '../lib/storage'
 import { isMockMode } from '../lib/mockGemini'
 import { MAX_XAI_SOURCES } from '../lib/xai'
 import { MAX_OPENAI_SOURCES } from '../lib/openai'
-import { buildEditPrompt, renderGuide, summarizeEdit, type EditMark } from '../lib/annotate'
+import { buildEditPrompt, buildSingleSourcePrompt, renderGuide, summarizeEdit, type EditMark } from '../lib/annotate'
 
 // One picture's edit history. Version 0 is the picture the chain started
 // from; every successful edit adds a version, and any version can be the
@@ -158,6 +158,7 @@ export function useEditStudio({ settings, references, onResult }: Options) {
       const guideSlots = turn.marks.length > 0 ? 1 : 0
       const extras = turn.withReferences ? references.slice(0, Math.max(0, maxSources - 1 - guideSlots)) : []
       const prompt = buildEditPrompt(turn.prompt, turn.marks, extras.length)
+      const singleSourcePrompt = turn.marks.length > 0 ? buildSingleSourcePrompt(turn.prompt, turn.marks) : undefined
 
       busyRef.current = true
       cancelledRef.current = false
@@ -199,30 +200,36 @@ export function useEditStudio({ settings, references, onResult }: Options) {
           setPreparing(false)
           return sources
         }
-        const finished = await run.start(keys, runSettings, await prepareSources(), (image) => {
-          // Numbered outside the state updater so StrictMode's double call
-          // can't skip a number or add the picture to the gallery twice
-          const number = versionCounters.current[sessionId] ?? 1
-          versionCounters.current[sessionId] = number + 1
-          const tagged: GeneratedImage = {
-            ...image,
-            edit: { sessionId, version: number, prompt: summarizeEdit(turn.prompt, turn.marks) },
-          }
-          const version: EditVersion = { id: crypto.randomUUID(), number, image: tagged, turnId: turn.id }
-          // The first result becomes the new base so the next edit chains on it
-          delivered += 1
-          const select = firstResult
-          firstResult = false
-          onResult(tagged)
-          patchSession(sessionId, (s) => ({
-            ...s,
-            versions: [...s.versions, version],
-            turns: s.turns.map((t) =>
-              t.id === turn.id ? { ...t, resultVersionIds: [...t.resultVersionIds, version.id] } : t,
-            ),
-            selectedVersionId: select ? version.id : s.selectedVersionId,
-          }))
-        })
+        const finished = await run.start(
+          keys,
+          runSettings,
+          await prepareSources(),
+          (image) => {
+            // Numbered outside the state updater so StrictMode's double call
+            // can't skip a number or add the picture to the gallery twice
+            const number = versionCounters.current[sessionId] ?? 1
+            versionCounters.current[sessionId] = number + 1
+            const tagged: GeneratedImage = {
+              ...image,
+              edit: { sessionId, version: number, prompt: summarizeEdit(turn.prompt, turn.marks) },
+            }
+            const version: EditVersion = { id: crypto.randomUUID(), number, image: tagged, turnId: turn.id }
+            // The first result becomes the new base so the next edit chains on it
+            delivered += 1
+            const select = firstResult
+            firstResult = false
+            onResult(tagged)
+            patchSession(sessionId, (s) => ({
+              ...s,
+              versions: [...s.versions, version],
+              turns: s.turns.map((t) =>
+                t.id === turn.id ? { ...t, resultVersionIds: [...t.resultVersionIds, version.id] } : t,
+              ),
+              selectedVersionId: select ? version.id : s.selectedVersionId,
+            }))
+          },
+          { singleSourcePrompt },
+        )
 
         if (!finished) {
           finishTurn({ status: 'error', errorMessage: 'Another edit was already running.' })

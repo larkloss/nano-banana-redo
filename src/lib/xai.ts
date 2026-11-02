@@ -62,7 +62,7 @@ function extractModelIds(json: unknown): string[] {
     .filter((id): id is string => typeof id === 'string' && id.length > 0)
 }
 
-export const callGenerateXai: GenerateCaller = async ({ apiKey, settings, references }, signal) => {
+export const callGenerateXai: GenerateCaller = async ({ apiKey, settings, references, singleSourcePrompt }, signal) => {
   const modelId = effectiveXaiModelId(settings)
   const base = {
     model: modelId,
@@ -95,7 +95,9 @@ export const callGenerateXai: GenerateCaller = async ({ apiKey, settings, refere
     // reference rather than failing the attempt. Moderation and auth errors
     // must propagate — retrying them would just bill twice.
     if (!isRejectedRequestShape(err)) throw err
-    return post(EDIT_ENDPOINT, singleBody, apiKey, signal)
+    // Only the first image goes now, so a prompt written about the others
+    // (an arrow guide) is swapped for one that stands on its own
+    return post(EDIT_ENDPOINT, { ...singleBody, prompt: singleSourcePrompt ?? base.prompt }, apiKey, signal)
   }
 }
 
