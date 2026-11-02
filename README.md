@@ -23,10 +23,9 @@ That's it — no npm, no server.
 Paste your [Google AI Studio API key](https://aistudio.google.com/apikey) into the
 **API key** field in the right-hand settings panel, enter your prompt, and hit **Run**.
 
-Alternatively, host it on GitHub Pages: the included workflow
-(`.github/workflows/deploy.yml`) builds and deploys on every push to `main` — just set
-**Settings → Pages → Source** to "GitHub Actions" once (public repo, or private with a
-paid plan).
+To use it from any device with your prompts, settings and reference photos synced, deploy
+it to Cloudflare Workers behind a password — free, see [DEPLOY.md](./DEPLOY.md). Every push
+to `main` redeploys it automatically.
 
 ## Quick start — with npm
 
