@@ -6,7 +6,7 @@
 // See DEPLOY.md for the one-time setup.
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "nano-banana-studio",
+  "name": "nano-banana-redo",
   "main": "worker/index.ts",
   "compatibility_date": "2025-09-01",
   // Copies the committed single-file builds into ./site before every deploy

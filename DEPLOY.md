@@ -13,24 +13,25 @@
 2. **从 GitHub 导入这个仓库**：左侧菜单 **Workers & Pages** → **Create application** →
    **Import a repository**（第一次会让你授权 Cloudflare 访问 GitHub）→ 选 `nano-banana-redo`。
    - 分支：选放着最新代码的分支（`main`，或者还没合并时选 `claude/jolly-ride-8g2e2e`）。
-   - 项目名保持 `nano-banana-studio`（要和仓库里 `wrangler.jsonc` 的 `name` 一致）。
+   - 项目名保持 `nano-banana-redo`（和仓库里 `wrangler.jsonc` 的 `name` 一致）。
    - Build command 留空；Deploy command 保持默认的 `npx wrangler deploy`。
    - 点 **Deploy**，等它跑完。
    - 推送到其他分支时 Cloudflare 会顺便做一个「预览」版本，它没有密码，只会显示「Not set up yet」，不用管。
      不想要的话：Settings → Build → 关掉 Preview builds。
-3. **设置密码**：进入刚建好的 `nano-banana-studio` → **Settings** → **Variables and Secrets** →
+3. **设置密码**：进入刚建好的 `nano-banana-redo` → **Settings** → **Variables and Secrets** →
    **Add** → Type 选 **Secret**，Name 填 `APP_PASSWORD`，Value 填你的密码 → **Deploy**。
    - 至少 8 位，建议 12 位以上。没设密码之前，网页只会显示「Not set up yet」，什么都不给看。
-4. **打开网址**：Worker 页面上有地址，形如 `https://nano-banana-studio.<你的子域>.workers.dev`。输入密码进入。
+4. **打开网址**：Worker 页面上有地址，形如 `https://nano-banana-redo.<你的子域>.workers.dev`。输入密码进入。
    三个页面的地址（建议各存一个书签）：
-   - 生成：`https://nano-banana-studio.<你的子域>.workers.dev/`
+   - 生成：`https://nano-banana-redo.<你的子域>.workers.dev/`
    - 局部重绘：`…workers.dev/edit`
    - 视频：`…workers.dev/video`
 5. **把现有的 prompt 搬上去**：设置面板最上面的「☁️ Cloud sync」→ **Import a saved file…** →
    选你之前「Save as…」存的那个 `.json` 文件。页面会刷新，里面的 prompt 和设置就都在云端了。
 6. 在「🔑 API keys」里填好 key（每台新设备填一次）。
 
-以后往这个分支推送代码，Cloudflare 会自动重新部署，云端数据不受影响。
+以后往生产分支（默认是 `main`）推送或合并代码，Cloudflare 会自动重新部署，云端数据不受影响。
+想让开发分支一推送就直接上线：Worker → **Settings** → **Build** → **Branch control**，把生产分支改成那个分支。
 
 ## 日常使用
 
