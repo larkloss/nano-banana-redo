@@ -31,6 +31,10 @@ export function computeCorrection(
   maskBits: Uint8Array,
   w: number,
   h: number,
+  // The crop's own frame is the picture's edge, not a seam: leave the field
+  // free there instead of pinning it (a region that runs off the picture
+  // has nothing outside to match)
+  openFrame = false,
 ): CorrectionField {
   const orig = splitChannels(origRgba, w * h)
   const res = splitChannels(resRgba, w * h)
@@ -38,7 +42,7 @@ export function computeCorrection(
   const { a, b } = linearFitOutside(orig, res, maskBits)
 
   // Residual after the global fit, fixed on the boundary ring, diffused inward
-  const field = solveMembraneCascade(orig, res, maskBits, w, h, a, b)
+  const field = solveMembraneCascade(orig, res, maskBits, w, h, a, b, openFrame)
 
   return { a, b, field, wL: w, hL: h }
 }
@@ -90,6 +94,7 @@ function solveMembraneCascade(
   h: number,
   a: Float32Array,
   b: Float32Array,
+  openFrame: boolean,
 ): Float32Array[] {
   const levels = [
     { div: 4, iters: 220 },
@@ -103,7 +108,7 @@ function solveMembraneCascade(
     const lw = Math.max(4, Math.floor(w / level.div))
     const lh = Math.max(4, Math.floor(h / level.div))
     const maskL = downsampleBitsAny(maskBits, w, h, lw, lh)
-    const ring = boundaryRing(maskL, lw, lh)
+    const ring = boundaryRing(maskL, lw, lh, openFrame)
 
     const field: Float32Array[] = []
     for (let c = 0; c < 3; c++) {
@@ -125,22 +130,19 @@ function solveMembraneCascade(
   return prev!.field
 }
 
-export function boundaryRing(maskBits: Uint8Array, w: number, h: number): Uint8Array {
+export function boundaryRing(maskBits: Uint8Array, w: number, h: number, openFrame = false): Uint8Array {
   const ring = new Uint8Array(maskBits.length)
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       const p = y * w + x
       if (!maskBits[p]) continue
-      const edge =
+      const seam =
         (x > 0 && !maskBits[p - 1]) ||
         (x < w - 1 && !maskBits[p + 1]) ||
         (y > 0 && !maskBits[p - w]) ||
-        (y < h - 1 && !maskBits[p + w]) ||
-        x === 0 ||
-        x === w - 1 ||
-        y === 0 ||
-        y === h - 1
-      if (edge) ring[p] = 1
+        (y < h - 1 && !maskBits[p + w])
+      const frame = x === 0 || x === w - 1 || y === 0 || y === h - 1
+      if (seam || (frame && !openFrame)) ring[p] = 1
     }
   }
   return ring

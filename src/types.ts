@@ -45,6 +45,9 @@ export interface Settings {
   targetCount: number
   attemptsCap: number
   prompt: string
+  // Edits that only keep part of the answer need it in the source's exact
+  // shape and close to its size; providers that take an explicit size use it
+  matchSize?: { width: number; height: number }
 }
 
 export interface PromptVariant {

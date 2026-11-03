@@ -44,8 +44,13 @@ export function useRetryRun() {
       keys: string[],
       settings: Settings,
       references: ParsedImagePart[],
-      onImage: (image: GeneratedImage) => void,
-      options: { singleSourcePrompt?: string } = {},
+      // `part` is the image as the engine received it (before re-encoding)
+      onImage: (image: GeneratedImage, part: ParsedImagePart) => void,
+      options: {
+        singleSourcePrompt?: string
+        // Post-processes each provider answer (e.g. the local-edit compositor)
+        wrapCaller?: (caller: GenerateCaller) => GenerateCaller
+      } = {},
     ): Promise<FinishedRun | null> => {
       if (runningRef.current || keys.length === 0) return null
       runningRef.current = true
@@ -75,7 +80,13 @@ export function useRetryRun() {
           const processed = isVideoModel
             ? processVideoPart(event.image, meta)
             : processImagePart(event.image, settings.format, meta)
-          pending.push(processed.then(onImage, () => undefined))
+          const part = event.image
+          pending.push(
+            processed.then(
+              (img) => onImage(img, part),
+              () => undefined,
+            ),
+          )
           setRunState((prev) => ({ ...prev, collected: prev.collected + 1 }))
         } else if (event.type === 'progress') {
           setRunState((prev) => ({ ...prev, attempts: event.attempts }))
@@ -105,7 +116,7 @@ export function useRetryRun() {
       let summary: RunSummary
       try {
         summary = await runGeneration(
-          pickCaller(settings),
+          options.wrapCaller ? options.wrapCaller(pickCaller(settings)) : pickCaller(settings),
           { keys, settings, references, singleSourcePrompt: options.singleSourcePrompt },
           controller.signal,
           onEvent,
