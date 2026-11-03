@@ -19,6 +19,8 @@ interface Props {
   onSelectVersion: (versionId: string) => void
   onSubmit: (request: EditRequest) => void
   onRetry: (turnId: string) => void
+  // Replace an "only around the arrows" result with the model's whole picture
+  onUseWhole: (versionId: string) => void
   onStop: () => void
   onClose: () => void
 }
@@ -42,6 +44,7 @@ export function EditStudio({
   onSelectVersion,
   onSubmit,
   onRetry,
+  onUseWhole,
   onStop,
   onClose,
 }: Props) {
@@ -51,7 +54,12 @@ export function EditStudio({
   const [modelId, setModelId] = useState(() =>
     getModel(settings.modelId).output === 'image' ? settings.modelId : IMAGE_MODELS[0].id,
   )
-  const [comparing, setComparing] = useState(false)
+  // Held-down views of the stage: the version it came from, the model's own
+  // whole picture, or the area that was replaced
+  const [peek, setPeek] = useState<null | 'before' | 'whole' | 'area'>(null)
+  const comparing = peek !== null
+  // Edits with arrows keep everything away from them pixel-identical
+  const [localOnly, setLocalOnly] = useState(true)
   // Arrows pointed at the picture, each with its own instruction. Positions
   // are relative, so they survive switching between versions of the picture.
   const [marks, setMarks] = useState<EditMark[]>([])
@@ -62,7 +70,13 @@ export function EditStudio({
   const selected = session.versions.find((v) => v.id === session.selectedVersionId) ?? session.versions[0]
   const selectedTurn = session.turns.find((t) => t.id === selected.turnId)
   const previous = selectedTurn ? session.versions.find((v) => v.id === selectedTurn.sourceVersionId) : null
-  const shown = comparing && previous ? previous : selected
+  const shown = peek === 'before' && previous ? previous : selected
+  const shownUrl = peek === 'whole' && selected.local ? selected.local.whole.objectUrl : shown.image.objectUrl
+  const hold = (view: 'before' | 'whole' | 'area') => ({
+    onPointerDown: () => setPeek(view),
+    onPointerUp: () => setPeek(null),
+    onPointerLeave: () => setPeek(null),
+  })
   const busyHere = isRunning && runningTurn?.sessionId === session.id
   const busyElsewhere = isRunning && !busyHere
   const marksReady = marks.every((m) => m.text.trim().length > 0)
@@ -87,7 +101,14 @@ export function EditStudio({
 
   const send = () => {
     if (!canSend) return
-    onSubmit({ prompt, marks, candidates, withReferences: withReferences && referenceCount > 0, modelId })
+    onSubmit({
+      prompt,
+      marks,
+      candidates,
+      withReferences: withReferences && referenceCount > 0,
+      modelId,
+      localOnly: localOnly && marks.length > 0,
+    })
     setPrompt('')
     setMarks([])
     setActiveMark(null)
@@ -171,11 +192,12 @@ export function EditStudio({
           <section className="flex min-h-0 flex-col gap-3 p-4">
             <div className="relative flex min-h-[240px] flex-1 items-center justify-center overflow-hidden rounded-2xl bg-zinc-900">
               <MarkedImage
-                src={shown.image.objectUrl}
+                src={shownUrl}
                 alt={versionLabel(shown)}
                 marks={marks}
                 activeId={activeMark}
                 interactive={!comparing}
+                overlayUrl={peek === 'area' ? selected.local?.areaUrl : null}
                 onAdd={addMark}
                 onMove={(id, x, y) => updateMark(id, { x, y })}
                 onActivate={setActiveMark}
@@ -190,7 +212,13 @@ export function EditStudio({
                 </span>
               )}
               <span className="absolute left-3 top-3 rounded-full bg-black/60 px-2.5 py-1 text-[11px] font-medium text-white">
-                {comparing && previous ? `Before · ${versionLabel(previous)}` : versionLabel(selected)}
+                {peek === 'before' && previous
+                  ? `Before · ${versionLabel(previous)}`
+                  : peek === 'whole'
+                    ? 'The model’s whole picture'
+                    : peek === 'area'
+                      ? 'Replaced area'
+                      : versionLabel(selected)}
               </span>
               {busyHere && (
                 <span className="absolute right-3 top-3 flex items-center gap-1.5 rounded-full bg-black/60 px-2.5 py-1 text-[11px] text-white">
@@ -202,14 +230,40 @@ export function EditStudio({
               {previous && (
                 <button
                   type="button"
-                  onPointerDown={() => setComparing(true)}
-                  onPointerUp={() => setComparing(false)}
-                  onPointerLeave={() => setComparing(false)}
+                  {...hold('before')}
                   className="select-none rounded-xl border border-zinc-700 px-3 py-1.5 text-xs text-zinc-300 hover:bg-zinc-800"
                   title="Hold to see the picture this version was edited from"
                 >
                   Hold to compare
                 </button>
+              )}
+              {selected.local && (
+                <>
+                  <button
+                    type="button"
+                    {...hold('area')}
+                    className="select-none rounded-xl border border-zinc-700 px-3 py-1.5 text-xs text-zinc-300 hover:bg-zinc-800"
+                    title="Hold to highlight the area taken from the model — everything else is your original, pixel for pixel"
+                  >
+                    Hold: what changed
+                  </button>
+                  <button
+                    type="button"
+                    {...hold('whole')}
+                    className="select-none rounded-xl border border-zinc-700 px-3 py-1.5 text-xs text-zinc-300 hover:bg-zinc-800"
+                    title="Hold to see the model’s own answer, before everything away from the arrows was put back"
+                  >
+                    Hold: whole picture
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onUseWhole(selected.id)}
+                    className="rounded-xl border border-zinc-700 px-3 py-1.5 text-xs text-zinc-300 hover:bg-zinc-800"
+                    title="Add the model’s whole picture as a new version instead"
+                  >
+                    Use whole picture
+                  </button>
+                </>
               )}
               <button
                 type="button"
@@ -344,6 +398,23 @@ export function EditStudio({
                       </button>
                     ))}
                   </div>
+                  {marks.length > 0 && (
+                    <label
+                      className="flex items-center gap-1.5 text-[11px] text-zinc-400"
+                      title={
+                        'On: only what changed around the arrows is kept — faces, skin and everything else stay ' +
+                        'your original, pixel for pixel. Off: the model’s whole picture is used.'
+                      }
+                    >
+                      <input
+                        type="checkbox"
+                        checked={localOnly}
+                        onChange={(e) => setLocalOnly(e.target.checked)}
+                        className="accent-blue-500"
+                      />
+                      only around arrows
+                    </label>
+                  )}
                   <label
                     className={`flex items-center gap-1.5 text-[11px] ${referenceCount > 0 ? 'text-zinc-400' : 'text-zinc-600'}`}
                     title={
@@ -417,7 +488,8 @@ function TurnView({
     .filter((v): v is EditVersion => Boolean(v))
   const running = turn.status === 'running'
   const attempts = live ? live.attempts : turn.attempts
-  const refusals = Math.max(0, attempts - results.length)
+  // Versions derived afterwards ("use whole picture") aren't answers
+  const refusals = Math.max(0, attempts - results.filter((v) => !v.derived).length)
   const lastFailure = live ? live.lastFailure : turn.lastFailure
   const waiting = live?.lanes.find((l) => l.status === 'backoff')
 
@@ -453,6 +525,7 @@ function TurnView({
             on {source ? versionLabel(source) : 'a removed version'} · {getModel(turn.modelId).label}
             {turn.candidates > 1 ? ` · ${turn.candidates} results` : ''}
             {turn.withReferences ? ' · with references' : ''}
+            {turn.localOnly && turn.marks.length > 0 ? ' · only around arrows' : ''}
           </p>
         </div>
       </div>
@@ -485,7 +558,7 @@ function TurnView({
           </div>
         ) : (
           <p className={statusTone(turn)} title={turn.errorMessage ?? turn.lastFailure ?? undefined}>
-            {statusText(turn, results.length, refusals)}
+            {statusText(turn, results.filter((v) => !v.derived).length, refusals)}
           </p>
         )}
 
@@ -509,6 +582,11 @@ function TurnView({
             ))}
           </div>
         )}
+        {localNotes(results).map((note) => (
+          <p key={note} className="mt-1.5 text-[11px] text-zinc-500">
+            {note}
+          </p>
+        ))}
 
         {!running && turn.status !== 'complete' && (
           <button
@@ -550,6 +628,28 @@ function statusTone(turn: EditTurn): string {
   if (turn.status === 'error') return 'text-red-400'
   if (turn.status === 'cap-reached') return 'text-amber-400'
   return 'text-zinc-400'
+}
+
+// What an "only around the arrows" edit kept, in plain words
+function localNotes(results: EditVersion[]): string[] {
+  const local = results.filter((v) => v.local)
+  if (local.length === 0) return []
+  const notes: string[] = []
+  const missed = new Set<number>()
+  local.forEach((v) => v.local!.info.arrowsChanged.forEach((changed, i) => !changed && missed.add(i + 1)))
+  if (missed.size > 0) {
+    const list = [...missed].join(', ')
+    notes.push(
+      `Nothing changed at arrow ${list} — try again, or reword ${missed.size > 1 ? 'those' : 'that'} instruction.`,
+    )
+  }
+  if (local.some((v) => v.local!.info.reachedLimit)) {
+    notes.push('The change may go further than what was kept — hold “what changed” to check, or use the whole picture.')
+  }
+  if (notes.length === 0) {
+    notes.push('Only what changed around the arrows was kept — everything else is your original, pixel for pixel.')
+  }
+  return notes
 }
 
 function versionLabel(v: EditVersion): string {

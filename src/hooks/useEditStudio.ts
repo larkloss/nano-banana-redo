@@ -8,6 +8,10 @@ import { isMockMode } from '../lib/mockGemini'
 import { MAX_XAI_SOURCES } from '../lib/xai'
 import { MAX_OPENAI_SOURCES } from '../lib/openai'
 import { buildEditPrompt, buildSingleSourcePrompt, renderGuide, summarizeEdit, type EditMark } from '../lib/annotate'
+import type { LocalEditInfo } from '../lib/localEdit'
+import { createLocalEditor, makeLocalEditCaller, type LocalEditor } from '../lib/localEditClient'
+import { base64ToBlob, processImagePart } from '../lib/imageUtils'
+import { blobToBase64 } from '../edit/lib/mask'
 
 // One picture's edit history. Version 0 is the picture the chain started
 // from; every successful edit adds a version, and any version can be the
@@ -18,6 +22,16 @@ export interface EditVersion {
   image: GeneratedImage
   // The turn that produced it; null for the original
   turnId: string | null
+  // Made from another version (its model's whole picture), not a new answer
+  derived?: boolean
+  // For "only around the arrows" edits: the model's own whole-picture answer
+  // (before everything away from the arrows was put back), the area that was
+  // taken from it, and what the change detection found
+  local?: {
+    whole: { blob: Blob; objectUrl: string }
+    areaUrl: string
+    info: LocalEditInfo
+  }
 }
 
 export type TurnStatus = Exclude<RunStatus, 'idle'>
@@ -32,6 +46,8 @@ export interface EditTurn {
   guideUrl: string | null
   sourceVersionId: string
   withReferences: boolean
+  // Keep everything away from the arrows exactly as it was
+  localOnly: boolean
   candidates: number
   modelId: string
   status: TurnStatus
@@ -54,6 +70,8 @@ export interface EditRequest {
   marks: EditMark[]
   candidates: number
   withReferences: boolean
+  // Keep everything away from the arrows exactly as it was
+  localOnly: boolean
   modelId: string
 }
 
@@ -165,7 +183,11 @@ export function useEditStudio({ settings, references, onResult }: Options) {
       setPreparing(true)
       patchSession(sessionId, (s) => ({ ...s, turns: [...s.turns.filter((t) => t.id !== turn.id), turn] }))
       setRunningTurn({ sessionId, turnId: turn.id })
+      const local = turn.localOnly && turn.marks.length > 0
+      let job: LocalEditor | null = null
       try {
+        if (local) job = await createLocalEditor(source.image.blob, turn.marks, settings.format)
+        const localJob = job
         const runSettings: Settings = {
           ...settings,
           modelId: turn.modelId,
@@ -178,6 +200,9 @@ export function useEditStudio({ settings, references, onResult }: Options) {
           targetCount: turn.candidates,
           // Edits keep the picture's own framing
           aspectRatio: 'auto',
+          // Pasting back only part of the answer needs it at the picture's
+          // own resolution, or the pasted area looks softer than the rest
+          ...(local ? { imageSize: sizeFor(source.image) } : {}),
         }
 
         let firstResult = true
@@ -204,7 +229,9 @@ export function useEditStudio({ settings, references, onResult }: Options) {
           keys,
           runSettings,
           await prepareSources(),
-          (image) => {
+          (image, part) => {
+            const extra = localJob?.extras.get(part.base64)
+            const wholeBlob = extra ? base64ToBlob(extra.raw.base64, extra.raw.mimeType) : null
             // Numbered outside the state updater so StrictMode's double call
             // can't skip a number or add the picture to the gallery twice
             const number = versionCounters.current[sessionId] ?? 1
@@ -213,7 +240,21 @@ export function useEditStudio({ settings, references, onResult }: Options) {
               ...image,
               edit: { sessionId, version: number, prompt: summarizeEdit(turn.prompt, turn.marks) },
             }
-            const version: EditVersion = { id: crypto.randomUUID(), number, image: tagged, turnId: turn.id }
+            const version: EditVersion = {
+              id: crypto.randomUUID(),
+              number,
+              image: tagged,
+              turnId: turn.id,
+              ...(extra && wholeBlob
+                ? {
+                    local: {
+                      whole: { blob: wholeBlob, objectUrl: URL.createObjectURL(wholeBlob) },
+                      areaUrl: URL.createObjectURL(extra.mask),
+                      info: extra.info,
+                    },
+                  }
+                : {}),
+            }
             // The first result becomes the new base so the next edit chains on it
             delivered += 1
             const select = firstResult
@@ -228,7 +269,10 @@ export function useEditStudio({ settings, references, onResult }: Options) {
               selectedVersionId: select ? version.id : s.selectedVersionId,
             }))
           },
-          { singleSourcePrompt },
+          {
+            singleSourcePrompt,
+            wrapCaller: localJob ? (caller) => makeLocalEditCaller(caller, localJob) : undefined,
+          },
         )
 
         if (!finished) {
@@ -251,6 +295,7 @@ export function useEditStudio({ settings, references, onResult }: Options) {
         // e.g. the source picture could not be read back for upload
         else finishTurn({ status: 'error', errorMessage: err instanceof Error ? err.message : String(err) })
       } finally {
+        if (job) job.release()
         busyRef.current = false
         setPreparing(false)
         setRunningTurn(null)
@@ -272,6 +317,7 @@ export function useEditStudio({ settings, references, onResult }: Options) {
         guideUrl: null,
         sourceVersionId: session.selectedVersionId,
         withReferences: request.withReferences,
+        localOnly: request.localOnly,
         candidates: request.candidates,
         modelId: request.modelId,
         status: 'running',
@@ -304,6 +350,45 @@ export function useEditStudio({ settings, references, onResult }: Options) {
     [sessions, busy, runTurn],
   )
 
+  // Swaps an "only around the arrows" result for the model's own whole
+  // picture: added as a new version (the composited one stays available)
+  const takeWholePicture = useCallback(
+    async (sessionId: string, versionId: string) => {
+      const source = sessions[sessionId]?.versions.find((v) => v.id === versionId)
+      if (!source?.local) return
+      const blob = source.local.whole.blob
+      const image = await processImagePart(
+        { base64: await blobToBase64(blob), mimeType: blob.type || 'image/png' },
+        settings.format,
+        { attempt: source.image.attempt, modelId: source.image.modelId },
+      )
+      const number = versionCounters.current[sessionId] ?? 1
+      versionCounters.current[sessionId] = number + 1
+      const prompt = source.image.edit?.prompt ?? ''
+      const tagged: GeneratedImage = {
+        ...image,
+        edit: { sessionId, version: number, prompt: `${prompt} (whole picture)` },
+      }
+      const version: EditVersion = {
+        id: crypto.randomUUID(),
+        number,
+        image: tagged,
+        turnId: source.turnId,
+        derived: true,
+      }
+      onResult(tagged)
+      patchSession(sessionId, (s) => ({
+        ...s,
+        versions: [...s.versions, version],
+        turns: s.turns.map((t) =>
+          t.id === source.turnId ? { ...t, resultVersionIds: [...t.resultVersionIds, version.id] } : t,
+        ),
+        selectedVersionId: version.id,
+      }))
+    },
+    [sessions, settings.format, onResult, patchSession],
+  )
+
   // A stop during preparation is honoured once the upload data is ready,
   // before anything is sent; afterwards it aborts the engine as usual
   const stop = useCallback(() => {
@@ -322,6 +407,7 @@ export function useEditStudio({ settings, references, onResult }: Options) {
       selectVersion,
       submit,
       retry,
+      takeWholePicture,
       stop,
       // While preparing, the engine's state still belongs to the last run
       runState: preparing ? null : run.runState,
@@ -336,6 +422,7 @@ export function useEditStudio({ settings, references, onResult }: Options) {
       selectVersion,
       submit,
       retry,
+      takeWholePicture,
       stop,
       preparing,
       run.runState,
@@ -354,4 +441,11 @@ class StoppedBeforeStart extends Error {
   constructor() {
     super('Stopped before the edit was sent')
   }
+}
+
+// Gemini output size closest to the picture being edited, so a partial paste
+// matches its sharpness
+function sizeFor(image: GeneratedImage): '1K' | '2K' | '4K' {
+  const long = Math.max(image.width, image.height)
+  return long > 2600 ? '4K' : long > 1400 ? '2K' : '1K'
 }

@@ -172,6 +172,7 @@ function App() {
           onSelectVersion={(versionId) => studio.selectVersion(studio.openSession!.id, versionId)}
           onSubmit={(request) => studio.submit(studio.openSession!.id, request)}
           onRetry={(turnId) => studio.retry(studio.openSession!.id, turnId)}
+          onUseWhole={(versionId) => void studio.takeWholePicture(studio.openSession!.id, versionId)}
           onStop={studio.stop}
           onClose={studio.close}
         />

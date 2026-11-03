@@ -11,6 +11,9 @@ interface Props {
   onAdd: (x: number, y: number) => void
   onMove: (id: string, x: number, y: number) => void
   onActivate: (id: string) => void
+  // Tints this area of the picture (a white-on-transparent mask image) —
+  // used to show what an "only around the arrows" edit replaced
+  overlayUrl?: string | null
 }
 
 // The stage picture with the user's numbered arrows on top. Click anywhere to
@@ -30,7 +33,7 @@ interface Drag {
   startY: number
   moved: boolean
 }
-export function MarkedImage({ src, alt, marks, activeId, interactive, onAdd, onMove, onActivate }: Props) {
+export function MarkedImage({ src, alt, marks, activeId, interactive, onAdd, onMove, onActivate, overlayUrl }: Props) {
   const imgRef = useRef<HTMLImageElement>(null)
   const [box, setBox] = useState<{ left: number; top: number; width: number; height: number } | null>(null)
   const drag = useRef<Drag | null>(null)
@@ -68,6 +71,22 @@ export function MarkedImage({ src, alt, marks, activeId, interactive, onAdd, onM
   return (
     <>
       <img ref={imgRef} src={src} alt={alt} className="max-h-full max-w-full object-contain" draggable={false} />
+      {box && overlayUrl && (
+        <div
+          aria-hidden
+          className="pointer-events-none absolute bg-fuchsia-500/55"
+          style={{
+            left: box.left,
+            top: box.top,
+            width: box.width,
+            height: box.height,
+            maskImage: `url(${overlayUrl})`,
+            maskSize: '100% 100%',
+            WebkitMaskImage: `url(${overlayUrl})`,
+            WebkitMaskSize: '100% 100%',
+          }}
+        />
+      )}
       {box && interactive && (
         <svg
           className="absolute touch-none select-none"
