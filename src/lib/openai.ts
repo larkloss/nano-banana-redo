@@ -56,6 +56,22 @@ export function openaiSizeFor(aspectRatio: string, tier: OpenaiSizeTier): string
   return STANDARD_SIZES[aspectRatio] ?? 'auto'
 }
 
+// A size in the exact shape of a source picture (within OpenAI's 16px grid)
+// and about its pixel count, inside the documented bounds
+export function openaiSizeMatching(width: number, height: number): string {
+  const ratio = Math.min(3, Math.max(1 / 3, width / height))
+  const target = Math.min(MAX_PIXELS, Math.max(MIN_PIXELS, width * height))
+  let h = Math.round(Math.sqrt(target / ratio) / 16) * 16
+  for (let tries = 0; tries < 400 && h >= 16; tries++) {
+    const w = Math.round((h * ratio) / 16) * 16
+    const pixels = w * h
+    if (w > MAX_EDGE || h > MAX_EDGE || pixels > MAX_PIXELS) h -= 16
+    else if (pixels < MIN_PIXELS) h += 16
+    else return `${w}x${h}`
+  }
+  return 'auto'
+}
+
 // Same override field as xAI: a typed model ID beats the dropdown preset.
 export function effectiveOpenaiModelId(settings: Settings): string {
   return settings.xaiModelId.trim() || settings.modelId
@@ -78,7 +94,9 @@ export const callGenerateOpenai: GenerateCaller = async ({ apiKey, settings, ref
     model: modelId,
     prompt: settings.prompt,
     n: 1,
-    size: openaiSizeFor(settings.aspectRatio, settings.openaiSizeTier),
+    size: settings.matchSize
+      ? openaiSizeMatching(settings.matchSize.width, settings.matchSize.height)
+      : openaiSizeFor(settings.aspectRatio, settings.openaiSizeTier),
     quality: clampQuality(settings.openaiQuality, modelId),
     output_format: outputFormat,
   }

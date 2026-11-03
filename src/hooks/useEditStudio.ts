@@ -24,6 +24,7 @@ export interface EditVersion {
   turnId: string | null
   // Made from another version (its model's whole picture), not a new answer
   derived?: boolean
+  derivedFrom?: string
   // For "only around the arrows" edits: the model's own whole-picture answer
   // (before everything away from the arrows was put back), the area that was
   // taken from it, and what the change detection found
@@ -186,7 +187,7 @@ export function useEditStudio({ settings, references, onResult }: Options) {
       const local = turn.localOnly && turn.marks.length > 0
       let job: LocalEditor | null = null
       try {
-        if (local) job = await createLocalEditor(source.image.blob, turn.marks, settings.format)
+        if (local) job = await createLocalEditor(source.image.blob, turn.marks)
         const localJob = job
         const runSettings: Settings = {
           ...settings,
@@ -200,9 +201,7 @@ export function useEditStudio({ settings, references, onResult }: Options) {
           targetCount: turn.candidates,
           // Edits keep the picture's own framing
           aspectRatio: 'auto',
-          // Pasting back only part of the answer needs it at the picture's
-          // own resolution, or the pasted area looks softer than the rest
-          ...(local ? { imageSize: sizeFor(source.image) } : {}),
+          ...(local ? localSettings(source.image) : {}),
         }
 
         let firstResult = true
@@ -279,6 +278,17 @@ export function useEditStudio({ settings, references, onResult }: Options) {
           finishTurn({ status: 'error', errorMessage: 'Another edit was already running.' })
           return
         }
+        if (localJob?.problem && delivered === 0) {
+          finishTurn({
+            status: 'error',
+            attempts: finished.attempts,
+            lastFailure: finished.lastFailure,
+            errorMessage:
+              `${getModel(turn.modelId).label} answered with a picture of a different shape, so it can’t be ` +
+              'pasted back around the arrows. Turn off “only around arrows”, or pick another model.',
+          })
+          return
+        }
         finishTurn({
           status: finished.result,
           attempts: finished.attempts,
@@ -351,17 +361,26 @@ export function useEditStudio({ settings, references, onResult }: Options) {
   )
 
   // Swaps an "only around the arrows" result for the model's own whole
-  // picture: added as a new version (the composited one stays available)
+  // picture: added as a new version (the composited one stays available).
+  // Once per version — a double click must not add it twice.
+  const wholeTaken = useRef(new Set<string>())
   const takeWholePicture = useCallback(
     async (sessionId: string, versionId: string) => {
       const source = sessions[sessionId]?.versions.find((v) => v.id === versionId)
-      if (!source?.local) return
+      if (!source?.local || wholeTaken.current.has(versionId)) return
+      wholeTaken.current.add(versionId)
       const blob = source.local.whole.blob
-      const image = await processImagePart(
-        { base64: await blobToBase64(blob), mimeType: blob.type || 'image/png' },
-        settings.format,
-        { attempt: source.image.attempt, modelId: source.image.modelId },
-      )
+      let image: GeneratedImage
+      try {
+        image = await processImagePart(
+          { base64: await blobToBase64(blob), mimeType: blob.type || 'image/png' },
+          settings.format,
+          { attempt: source.image.attempt, modelId: source.image.modelId },
+        )
+      } catch {
+        wholeTaken.current.delete(versionId)
+        return
+      }
       const number = versionCounters.current[sessionId] ?? 1
       versionCounters.current[sessionId] = number + 1
       const prompt = source.image.edit?.prompt ?? ''
@@ -375,6 +394,7 @@ export function useEditStudio({ settings, references, onResult }: Options) {
         image: tagged,
         turnId: source.turnId,
         derived: true,
+        derivedFrom: source.id,
       }
       onResult(tagged)
       patchSession(sessionId, (s) => ({
@@ -443,9 +463,17 @@ class StoppedBeforeStart extends Error {
   }
 }
 
-// Gemini output size closest to the picture being edited, so a partial paste
-// matches its sharpness
-function sizeFor(image: GeneratedImage): '1K' | '2K' | '4K' {
+// "Only around the arrows" pastes part of the answer back into the picture,
+// so the answer has to come in the picture's own shape and about its own
+// resolution (or the pasted area looks softer than the rest) — asked for in
+// each provider's terms. The composite is always a lossless PNG: a JPEG
+// would re-encode every pixel the edit was meant to leave alone.
+function localSettings(image: GeneratedImage): Partial<Settings> {
   const long = Math.max(image.width, image.height)
-  return long > 2600 ? '4K' : long > 1400 ? '2K' : '1K'
+  return {
+    imageSize: long > 2600 ? '4K' : long > 1400 ? '2K' : '1K',
+    xaiResolution: long > 1400 ? '2k' : '1k',
+    matchSize: { width: image.width, height: image.height },
+    format: 'png',
+  }
 }

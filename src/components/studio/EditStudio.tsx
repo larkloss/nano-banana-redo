@@ -77,6 +77,7 @@ export function EditStudio({
     onPointerUp: () => setPeek(null),
     onPointerLeave: () => setPeek(null),
   })
+  const wholeAlreadyTaken = session.versions.some((v) => v.derivedFrom === selected.id)
   const busyHere = isRunning && runningTurn?.sessionId === session.id
   const busyElsewhere = isRunning && !busyHere
   const marksReady = marks.every((m) => m.text.trim().length > 0)
@@ -258,8 +259,13 @@ export function EditStudio({
                   <button
                     type="button"
                     onClick={() => onUseWhole(selected.id)}
-                    className="rounded-xl border border-zinc-700 px-3 py-1.5 text-xs text-zinc-300 hover:bg-zinc-800"
-                    title="Add the model’s whole picture as a new version instead"
+                    disabled={wholeAlreadyTaken}
+                    className="rounded-xl border border-zinc-700 px-3 py-1.5 text-xs text-zinc-300 hover:bg-zinc-800 disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent"
+                    title={
+                      wholeAlreadyTaken
+                        ? 'Already added as its own version'
+                        : 'Add the model’s whole picture as a new version instead'
+                    }
                   >
                     Use whole picture
                   </button>
@@ -372,9 +378,11 @@ export function EditStudio({
                   }}
                   rows={marks.length > 0 ? 2 : 3}
                   placeholder={
-                    marks.length > 0
-                      ? 'Anything else, for the whole picture? (optional)'
-                      : 'What should change? Or click the picture to point at a spot. e.g. “Make her hair a little longer”'
+                    marks.length === 0
+                      ? 'What should change? Or click the picture to point at a spot. e.g. “Make her hair a little longer”'
+                      : localOnly
+                        ? 'Anything else about these spots? (optional)'
+                        : 'Anything else, for the whole picture? (optional)'
                   }
                   className="block w-full resize-none rounded-2xl bg-transparent px-3.5 pt-3 text-sm leading-relaxed text-zinc-200 placeholder-zinc-600 outline-none"
                 />
@@ -452,6 +460,12 @@ export function EditStudio({
                   )}
                 </div>
               </div>
+              {marks.length > 0 && localOnly && prompt.trim().length > 0 && (
+                <p className="mt-1.5 text-[11px] text-amber-400">
+                  Only changes around the arrows are kept — turn off “only around arrows” to apply this to the whole
+                  picture.
+                </p>
+              )}
               <p className="mt-1.5 text-[10px] text-zinc-600">
                 {marks.length > 0 && !marksReady
                   ? 'Say what to do at each numbered arrow, then send'
@@ -489,7 +503,8 @@ function TurnView({
   const running = turn.status === 'running'
   const attempts = live ? live.attempts : turn.attempts
   // Versions derived afterwards ("use whole picture") aren't answers
-  const refusals = Math.max(0, attempts - results.filter((v) => !v.derived).length)
+  const answers = results.filter((v) => !v.derived).length
+  const refusals = Math.max(0, attempts - answers)
   const lastFailure = live ? live.lastFailure : turn.lastFailure
   const waiting = live?.lanes.find((l) => l.status === 'backoff')
 
@@ -539,7 +554,7 @@ function TurnView({
               <span>
                 Working on it… try <b>{Math.max(1, attempts + 1)}</b>
                 {live ? ` of ${live.cap}` : ''}
-                {results.length > 0 && ` · ${results.length}/${turn.candidates} done`}
+                {answers > 0 && ` · ${answers}/${turn.candidates} done`}
               </span>
               <button type="button" onClick={onStop} className="ml-auto text-[11px] text-zinc-500 hover:text-red-400">
                 stop
@@ -558,7 +573,7 @@ function TurnView({
           </div>
         ) : (
           <p className={statusTone(turn)} title={turn.errorMessage ?? turn.lastFailure ?? undefined}>
-            {statusText(turn, results.filter((v) => !v.derived).length, refusals)}
+            {statusText(turn, answers, refusals)}
           </p>
         )}
 
@@ -582,7 +597,7 @@ function TurnView({
             ))}
           </div>
         )}
-        {localNotes(results).map((note) => (
+        {localNotes(turn, results).map((note) => (
           <p key={note} className="mt-1.5 text-[11px] text-zinc-500">
             {note}
           </p>
@@ -607,9 +622,12 @@ function statusText(turn: EditTurn, got: number, refusals: number): string {
   const tries = `${turn.attempts} ${turn.attempts === 1 ? 'try' : 'tries'}`
   switch (turn.status) {
     case 'complete':
-      return refusals > 0
-        ? `Done in ${tries} — ${refusals} ${refusals === 1 ? 'was' : 'were'} turned down along the way.`
-        : `Done on the first try.`
+      if (refusals === 0) return 'Done on the first try.'
+      // In a local edit, an answer can also be set aside because it changed
+      // nothing at the arrows — not only because it was refused
+      return turn.localOnly && turn.marks.length > 0
+        ? `Done in ${tries} — ${refusals} earlier ${refusals === 1 ? 'answer wasn’t' : 'answers weren’t'} usable.`
+        : `Done in ${tries} — ${refusals} ${refusals === 1 ? 'was' : 'were'} turned down along the way.`
     case 'cap-reached':
       return `Gave up after ${tries}${got > 0 ? ` with ${got}/${turn.candidates}` : ''} — last one ${
         friendlyReason(turn.lastFailure) ?? 'failed'
@@ -631,16 +649,31 @@ function statusTone(turn: EditTurn): string {
 }
 
 // What an "only around the arrows" edit kept, in plain words
-function localNotes(results: EditVersion[]): string[] {
+function localNotes(turn: EditTurn, results: EditVersion[]): string[] {
   const local = results.filter((v) => v.local)
   if (local.length === 0) return []
   const notes: string[] = []
-  const missed = new Set<number>()
-  local.forEach((v) => v.local!.info.arrowsChanged.forEach((changed, i) => !changed && missed.add(i + 1)))
-  if (missed.size > 0) {
-    const list = [...missed].join(', ')
+  // Arrows no result changed (one result missing an arrow another one got
+  // isn't worth a warning)
+  const missed = turn.marks
+    .map((_, i) => i)
+    .filter((i) => local.every((v) => v.local!.info.arrowsChanged[i] === false))
+    .map((i) => i + 1)
+  if (missed.length > 0) {
+    const one = missed.length === 1
     notes.push(
-      `Nothing changed at arrow ${list} — try again, or reword ${missed.size > 1 ? 'those' : 'that'} instruction.`,
+      `Nothing changed at ${one ? 'arrow' : 'arrows'} ${listing(missed)} — try again, or reword ${
+        one ? 'that instruction' : 'those instructions'
+      }.`,
+    )
+  }
+  if (local.some((v) => v.local!.info.widespread)) {
+    notes.push(
+      'The model also changed things away from the arrows — only the part around them was kept. Hold “whole picture” to see everything it did, or use it instead.',
+    )
+  } else if (turn.prompt) {
+    notes.push(
+      'Your extra instruction was only kept where it touched the arrows — hold “whole picture” to compare, or use the whole picture.',
     )
   }
   if (local.some((v) => v.local!.info.reachedLimit)) {
@@ -650,6 +683,12 @@ function localNotes(results: EditVersion[]): string[] {
     notes.push('Only what changed around the arrows was kept — everything else is your original, pixel for pixel.')
   }
   return notes
+}
+
+// 1 · 1 and 2 · 1, 2 and 3
+function listing(items: number[]): string {
+  if (items.length <= 1) return items.join('')
+  return `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`
 }
 
 function versionLabel(v: EditVersion): string {

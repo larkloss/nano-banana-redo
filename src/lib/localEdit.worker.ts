@@ -1,10 +1,9 @@
 // Background thread for the local-edit compositor (see localEditClient.ts)
 import { composeLocalEdit, prepareLocalEdit, releaseLocalEdit, type LocalEditJob } from './localEdit'
 import type { EditMark } from './annotate'
-import type { OutputFormat } from '../types'
 
 type Request =
-  | { id: number; type: 'prepare'; source: Blob; marks: EditMark[]; format: OutputFormat }
+  | { id: number; type: 'prepare'; source: Blob; marks: EditMark[] }
   | { id: number; type: 'compose'; result: Blob }
   | { id: number; type: 'release' }
 
@@ -14,7 +13,7 @@ self.onmessage = async (event: MessageEvent<Request>) => {
   const msg = event.data
   try {
     if (msg.type === 'prepare') {
-      job = await prepareLocalEdit(msg.source, msg.marks, msg.format)
+      job = await prepareLocalEdit(msg.source, msg.marks)
       self.postMessage({ id: msg.id, ok: true })
     } else if (msg.type === 'compose') {
       if (!job) throw new Error('not prepared')

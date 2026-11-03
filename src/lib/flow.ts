@@ -23,16 +23,29 @@ export interface FlowField {
   v: Float32Array
 }
 
+// Raw per-block measurements, before filling and smoothing
+export interface BlockGrid {
+  gx: number
+  gy: number
+  // block centres, px
+  cx: Float32Array
+  cy: Float32Array
+  u: Float32Array
+  v: Float32Array
+  // 1 = a trustworthy measurement
+  usable: Uint8Array
+}
+
 // `gray` is w×h; `grayP`/`validP` are the answer, drawn (after the global
-// shift) into a (w+2M)×(h+2M) canvas so shifts up to ±(M-1) stay inside.
-export function blockFlow(
+// placement) into a (w+2M)×(h+2M) canvas so shifts up to ±(M-1) stay inside.
+export function measureBlocks(
   gray: Float32Array,
   w: number,
   h: number,
   grayP: Float32Array,
   validP: Uint8Array,
   M: number,
-): FlowField {
+): BlockGrid {
   const R = M - 1
   const pw = w + 2 * M
   const gx = Math.max(1, Math.ceil((w - BLOCK) / STEP) + 1)
@@ -83,13 +96,14 @@ export function blockFlow(
           if (e < best.e) best = { sx, sy, e }
         }
       }
-      if (!Number.isFinite(best.e)) continue
+      // A best match at the edge of the search may really lie beyond it
+      if (!Number.isFinite(best.e) || Math.abs(best.sx) >= R || Math.abs(best.sy) >= R) continue
       const sub = (a: number, b: number, c: number) => {
         const den = a - 2 * b + c
         return Number.isFinite(den) && den > 1e-6 ? Math.max(-0.5, Math.min(0.5, (0.5 * (a - c)) / den)) : 0
       }
-      const fx = Math.abs(best.sx) < R ? sub(cost(best.sx - 1, best.sy), best.e, cost(best.sx + 1, best.sy)) : 0
-      const fy = Math.abs(best.sy) < R ? sub(cost(best.sx, best.sy - 1), best.e, cost(best.sx, best.sy + 1)) : 0
+      const fx = sub(cost(best.sx - 1, best.sy), best.e, cost(best.sx + 1, best.sy))
+      const fy = sub(cost(best.sx, best.sy - 1), best.e, cost(best.sx, best.sy + 1))
       gu[k] = best.sx + fx
       gv[k] = best.sy + fy
       err[k] = best.e
@@ -103,6 +117,27 @@ export function blockFlow(
   errs.sort((a, b) => a - b)
   const typical = errs.length > 0 ? errs[Math.floor(errs.length / 2)] : 0
   for (let k = 0; k < err.length; k++) if (usable[k] && err[k] > BAD_MATCH * Math.max(typical, 1)) usable[k] = 0
+
+  const cxs = new Float32Array(gx * gy)
+  const cys = new Float32Array(gx * gy)
+  for (let by = 0; by < gy; by++) {
+    for (let bx = 0; bx < gx; bx++) {
+      cxs[by * gx + bx] = Math.min(Math.max(0, w - BLOCK), bx * STEP) + BLOCK / 2
+      cys[by * gx + bx] = Math.min(Math.max(0, h - BLOCK), by * STEP) + BLOCK / 2
+    }
+  }
+  return { gx, gy, cx: cxs, cy: cys, u: gu, v: gv, usable }
+}
+
+export function blockFlow(
+  gray: Float32Array,
+  w: number,
+  h: number,
+  grayP: Float32Array,
+  validP: Uint8Array,
+  M: number,
+): FlowField {
+  const { gx, gy, u: gu, v: gv, usable } = measureBlocks(gray, w, h, grayP, validP, M)
 
   // Median filter over trusted neighbours (removes stray matches)
   const mu = gu.slice()
@@ -166,6 +201,100 @@ export function blockFlow(
     }
   }
   return { u, v }
+}
+
+// The answer's overall zoom: models sometimes redraw the picture a few
+// percent larger or smaller (or come back in a slightly different shape that
+// is then stretched to fit), which moves the content by more than the block
+// search can follow near the edges. Fits, per axis, displacement = scale ×
+// (position − centre) + shift to the trusted blocks, ignoring outliers (the
+// edit itself, mismatched blocks). Returns null when the blocks don't say
+// anything reliable.
+export function fitAxisScale(
+  grid: BlockGrid,
+  w: number,
+  h: number,
+  skip: (x: number, y: number) => boolean,
+): { ax: number; bx: number; ay: number; by: number; xc: number; yc: number } | null {
+  const xs: number[] = []
+  const ys: number[] = []
+  const us: number[] = []
+  const vs: number[] = []
+  for (let k = 0; k < grid.usable.length; k++) {
+    if (!grid.usable[k] || skip(grid.cx[k], grid.cy[k])) continue
+    xs.push(grid.cx[k])
+    ys.push(grid.cy[k])
+    us.push(grid.u[k])
+    vs.push(grid.v[k])
+  }
+  if (xs.length < 8) return null
+  const xc = w / 2
+  const yc = h / 2
+  // A model zooms evenly far more often than it stretches: measure one zoom
+  // from both directions together, and only treat the axes separately when
+  // they clearly disagree (a picture that came back in a slightly different
+  // shape and was stretched to fit)
+  const both = robustLine(
+    [...xs.map((x) => x - xc), ...ys.map((y) => y - yc)],
+    [...us, ...vs],
+    0,
+    Math.max(w, h),
+    [...xs.map(() => 0), ...ys.map(() => 1)],
+  )
+  const fx = robustLine(xs, us, xc, w)
+  const fy = robustLine(ys, vs, yc, h)
+  if (both && (!fx || !fy || Math.abs(fx.slope - fy.slope) < 0.008)) {
+    // shared slope; each axis keeps its own shift
+    const atX = median(us.map((u, i) => u - both.slope * (xs[i] - xc)))
+    const atY = median(vs.map((v, i) => v - both.slope * (ys[i] - yc)))
+    return { ax: both.slope, bx: atX, ay: both.slope, by: atY, xc, yc }
+  }
+  if (!fx || !fy) return null
+  return { ax: fx.slope, bx: fx.at, ay: fy.slope, by: fy.at, xc, yc }
+}
+
+// y ≈ slope·(x − centre) + at, by Theil–Sen (the median of the slopes
+// between point pairs — unmoved by a large share of outliers). Only trusted
+// when the points spread over a good part of the picture and the slope
+// clearly beats a constant; otherwise the slope is 0. `group` keeps pairs
+// within one series (the two axes of a joint fit each have their own shift).
+function robustLine(
+  x: number[],
+  y: number[],
+  centre: number,
+  size: number,
+  group?: number[],
+): { slope: number; at: number } | null {
+  const n = x.length
+  const sortedX = x.slice().sort((a, b) => a - b)
+  if (sortedX[Math.floor(n * 0.9)] - sortedX[Math.floor(n * 0.1)] < size / 3) return null
+  const slopes: number[] = []
+  for (let i = 0; i < n; i++) {
+    for (let j = i + 1; j < n; j++) {
+      if (group && group[i] !== group[j]) continue
+      const dx = x[j] - x[i]
+      if (Math.abs(dx) >= size / 8) slopes.push((y[j] - y[i]) / dx)
+    }
+  }
+  if (slopes.length < 10) return null
+  const slope = median(slopes)
+  const offsets = y.map((yi, i) => yi - slope * (x[i] - centre))
+  // per-series shift (one series unless grouped)
+  const shiftOf = (g: number) => median(offsets.filter((_, i) => (group ? group[i] : 0) === g))
+  const flatOf = (g: number) => median(y.filter((_, i) => (group ? group[i] : 0) === g))
+  const at0 = shiftOf(0)
+  const shifts = group ? [at0, shiftOf(1)] : [at0]
+  const flats = group ? [flatOf(0), flatOf(1)] : [flatOf(0)]
+  const g = (i: number) => (group ? group[i] : 0)
+  const spreadWith = median(y.map((yi, i) => Math.abs(yi - (slope * (x[i] - centre) + shifts[g(i)]))))
+  const spreadFlat = median(y.map((yi, i) => Math.abs(yi - flats[g(i)])))
+  if (spreadWith > 0.85 * spreadFlat) return { slope: 0, at: flats[0] }
+  return { slope, at: at0 }
+}
+
+function median(values: number[]): number {
+  const sorted = values.slice().sort((a, b) => a - b)
+  return sorted[Math.floor(sorted.length / 2)]
 }
 
 function fillGrid(

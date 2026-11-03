@@ -315,6 +315,26 @@ export function fillSmallHoles(mask: Uint8Array, w: number, h: number, maxArea: 
   }
 }
 
+// Background pockets the mask closes off completely (4-connected areas of
+// unset pixels that don't reach the frame)
+export function enclosedHoles(mask: Uint8Array, w: number, h: number): Uint8Array {
+  const inv = new Uint8Array(w * h)
+  for (let p = 0; p < inv.length; p++) inv[p] = mask[p] ? 0 : 1
+  const { labels, count } = labelComponents4(inv, w, h)
+  const touchesBorder = new Uint8Array(count + 1)
+  for (let x = 0; x < w; x++) {
+    touchesBorder[labels[x]] = 1
+    touchesBorder[labels[(h - 1) * w + x]] = 1
+  }
+  for (let y = 0; y < h; y++) {
+    touchesBorder[labels[y * w]] = 1
+    touchesBorder[labels[y * w + w - 1]] = 1
+  }
+  const out = new Uint8Array(w * h)
+  for (let p = 0; p < out.length; p++) if (labels[p] && !touchesBorder[labels[p]]) out[p] = 1
+  return out
+}
+
 // 4-connected labelling, used for holes so a hole can't leak out through a
 // diagonal gap in an 8-connected region
 function labelComponents4(mask: Uint8Array, w: number, h: number): { labels: Int32Array; count: number } {

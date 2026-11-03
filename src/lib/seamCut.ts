@@ -18,8 +18,11 @@ export function optimalSeamRegion(
   lengthPenalty = 1,
   // Charged for every band pixel taken from the new picture. Keeps the cut
   // from drifting inward around holes (a shorter loop is otherwise always
-  // "cheaper") and from taking more of the new picture than it needs.
+  // "cheaper") and from taking more of the new picture than it needs —
+  // more so where the two pictures differ (an unchanged name tag or eye the
+  // change runs around, redrawn a little differently by the model).
   takeCost = 0.3,
+  takeGain = 0.25,
 ): Uint8Array {
   const n = w * h
   // Band pixels get graph node ids; must → source, outside may → sink
@@ -61,7 +64,8 @@ export function optimalSeamRegion(
     // The picture's own frame isn't a seam: a band pixel on the image border
     // has no neighbour there, so nothing is added for it
     if (toSource > 0) graph.addEdge(S, u, toSource, 0)
-    if (toSink + takeCost > 0) graph.addEdge(u, T, toSink + takeCost, 0)
+    const take = takeCost + takeGain * cost[p]
+    if (toSink + take > 0) graph.addEdge(u, T, toSink + take, 0)
   }
 
   graph.maxFlow(S, T)
