@@ -8,9 +8,18 @@ interface Props {
   disabled: boolean
   max?: number
   addLabel?: string
+  // Show each photo's number — what "@1", "@2", … in the prompt point at
+  numbered?: boolean
 }
 
-export function ReferenceImageStrip({ references, onChange, disabled, max = 6, addLabel = 'Reference' }: Props) {
+export function ReferenceImageStrip({
+  references,
+  onChange,
+  disabled,
+  max = 6,
+  addLabel = 'Reference',
+  numbered = false,
+}: Props) {
   const inputRef = useRef<HTMLInputElement>(null)
 
   const addFiles = async (files: FileList | File[]) => {
@@ -39,14 +48,19 @@ export function ReferenceImageStrip({ references, onChange, disabled, max = 6, a
 
   return (
     <div className="flex flex-wrap items-center gap-2">
-      {references.map((ref) => (
+      {references.map((ref, i) => (
         <div key={ref.id} className="group relative">
           <img
             src={ref.objectUrl}
             alt={ref.name}
-            title={ref.name}
+            title={numbered && i < max ? `${ref.name} — @${i + 1} in the prompt points at this photo` : ref.name}
             className="h-20 w-20 rounded-xl border border-zinc-700 object-cover"
           />
+          {numbered && i < max && (
+            <span className="pointer-events-none absolute bottom-1 left-1 rounded-full bg-black/65 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-white">
+              @{i + 1}
+            </span>
+          )}
           {!disabled && (
             <button
               type="button"

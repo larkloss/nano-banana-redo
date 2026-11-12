@@ -1,4 +1,5 @@
 import type { ParsedImagePart } from '../types'
+import { mentionedNumbers, nameMentions } from './mentions'
 
 // ---------------------------------------------------------------------------
 // Marked edits: the user pins spots (or drags boxes) on the picture and gives
@@ -160,22 +161,42 @@ function drawMark(
 // ---------------------------------------------------------------------------
 
 // Builds the edit instruction. Image order in the request: the picture to
-// edit, then (with marks) the guide, then any reference photos.
+// edit, then (with marks) the guide, then any reference photos. "@2" in an
+// instruction points at reference photo 2, which the prompt ties to its place
+// among the attached images.
 export function buildEditPrompt(text: string, marks: EditMark[], referenceCount: number): string {
-  const general = text.trim()
+  const firstReference = marks.length > 0 ? 3 : 2
+  const texts = [text, ...marks.map((m) => m.text)]
+  const pointed = texts.some((t) => mentionedNumbers(t).some((n) => n <= referenceCount))
+  // A mention of a photo that isn't attached still reads as plain words
+  const named = (t: string) =>
+    nameMentions(t.trim(), 99, (n) =>
+      n <= referenceCount ? `reference photo ${n} (image ${firstReference + n - 1})` : `reference photo ${n}`,
+    )
+  const numbering = pointed
+    ? ` They are numbered in the order attached: ${Array.from(
+        { length: referenceCount },
+        (_, i) => `reference photo ${i + 1} is image ${firstReference + i}`,
+      ).join(', ')}.`
+    : ''
+  const use = pointed
+    ? ' Use them the way the instructions say; apart from that, only to keep the character’s face and likeness consistent.'
+    : " Use them only to keep the character's face and likeness consistent"
+  const general = named(text)
   if (marks.length === 0) {
     if (referenceCount === 0) return general
     return (
-      `Edit the first image: ${general}\n\nThe other images are reference photos of the same character. ` +
-      "Use them only to keep the character's face and likeness consistent; change nothing else that wasn't asked for."
+      `Edit the first image: ${general}\n\nThe other images are reference photos of the same character.` +
+      numbering +
+      (pointed ? `${use} Change` : `${use}; change`) +
+      " nothing else that wasn't asked for."
     )
   }
 
-  const lines = marks.map((mark, i) => `${i + 1} — ${describeMark(mark, i)}: ${mark.text.trim()}`)
+  const lines = marks.map((mark, i) => `${i + 1} — ${describeMark(mark, i)}: ${named(mark.text)}`)
   const refNote =
     referenceCount > 0
-      ? `\nThe images after the second are reference photos of the same character — use them only to keep the ` +
-        "character's face and likeness consistent."
+      ? `\nThe images after the second are reference photos of the same character.${numbering}${use}${pointed ? '' : '.'}`
       : ''
   return [
     'Edit the first image.',
@@ -196,11 +217,13 @@ export function buildEditPrompt(text: string, marks: EditMark[], referenceCount:
 // The same request for when only the picture itself can be sent (no guide
 // image): each spot is described by position alone
 export function buildSingleSourcePrompt(text: string, marks: EditMark[]): string {
-  const general = text.trim()
+  // No reference photo travels with this one: a mention is just words
+  const plain = (t: string) => nameMentions(t.trim(), 99, (n) => `reference photo ${n}`)
+  const general = plain(text)
   const lines = marks.map(
     (mark, i) =>
       `${i + 1} — the thing at ${region(mark.x, mark.y)}, about ${pct(mark.x)} from the left and ` +
-      `${pct(mark.y)} from the top: ${mark.text.trim()}`,
+      `${pct(mark.y)} from the top: ${plain(mark.text)}`,
   )
   return [
     'Edit this image. Changes:',

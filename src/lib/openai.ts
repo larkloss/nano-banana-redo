@@ -1,6 +1,7 @@
 import type { OpenaiQuality, OpenaiSizeTier, ParsedImagePart, ParsedResponse, Settings } from '../types'
 import type { GenerateCaller } from './gemini'
 import { base64ToBlob } from './imageUtils'
+import { withNumberedReferences } from './mentions'
 
 // OpenAI GPT Image models. Text-to-image is a JSON POST; anything with
 // reference images goes through the edits endpoint as multipart/form-data
@@ -92,7 +93,8 @@ export const callGenerateOpenai: GenerateCaller = async ({ apiKey, settings, ref
   const outputFormat = settings.format === 'jpg' ? 'jpeg' : 'png'
   const common: Record<string, string | number> = {
     model: modelId,
-    prompt: settings.prompt,
+    // "@2" points at the second attached image
+    prompt: withNumberedReferences(settings.prompt, Math.min(references.length, MAX_OPENAI_SOURCES)),
     n: 1,
     size: settings.matchSize
       ? openaiSizeMatching(settings.matchSize.width, settings.matchSize.height)

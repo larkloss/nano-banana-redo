@@ -1,6 +1,7 @@
 import { GoogleGenAI, ThinkingLevel } from '@google/genai'
 import type { ParsedImagePart, ParsedResponse, Settings } from '../types'
 import { getModel } from './models'
+import { captionedReferences, referenceName } from './mentions'
 
 export interface GenerateParams {
   apiKey: string
@@ -27,14 +28,22 @@ function getClient(apiKey: string): GoogleGenAI {
 
 type Part = { text: string } | { inlineData: { mimeType: string; data: string } }
 
+const capitalise = (text: string) => text[0].toUpperCase() + text.slice(1)
+
 export const callGenerate: GenerateCaller = async ({ apiKey, settings, references }, signal) => {
   const ai = getClient(apiKey)
   const model = getModel(settings.modelId)
   const systemInstruction = settings.systemInstruction.trim()
 
+  // "@2" in the prompt points at the second reference: caption each picture
+  // so the model knows which is which
+  const mentions = captionedReferences(settings.prompt, references.length)
   const parts: Part[] = [
-    ...references.map((r) => ({ inlineData: { mimeType: r.mimeType, data: r.base64 } })),
-    { text: settings.prompt },
+    ...references.flatMap((r, i): Part[] => [
+      ...(mentions.captions ? [{ text: `${capitalise(referenceName(i + 1))}:` }] : []),
+      { inlineData: { mimeType: r.mimeType, data: r.base64 } },
+    ]),
+    { text: mentions.prompt },
   ]
 
   const imageConfig: Record<string, string> = {}

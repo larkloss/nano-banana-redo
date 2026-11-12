@@ -5,6 +5,7 @@ import { MODELS, PROVIDER_LABELS, PROVIDER_ORDER, getModel } from '../../lib/mod
 import { downloadBlob, makeFilename, sourceLabel } from '../../lib/imageUtils'
 import { friendlyReason } from '../../lib/friendly'
 import { MAX_MARKS, markColor, summarizeEdit, type EditMark } from '../../lib/annotate'
+import { mentionedNumbers } from '../../lib/mentions'
 import { MarkedImage } from './MarkedImage'
 import { MarkList } from './MarkList'
 
@@ -77,6 +78,11 @@ export function EditStudio({
     onPointerUp: () => setPeek(null),
     onPointerLeave: () => setPeek(null),
   })
+  // "@2" in an instruction points at reference photo 2 — which only travels
+  // with the edit when "+ reference photos" is ticked
+  const mentioned = mentionedNumbers([prompt, ...marks.map((m) => m.text)].join('\n'))
+  const sendingReferences = withReferences && referenceCount > 0
+  const unsentMentions = mentioned.filter((n) => !sendingReferences || n > referenceCount)
   const wholeAlreadyTaken = session.versions.some((v) => v.derivedFrom === selected.id)
   const busyHere = isRunning && runningTurn?.sessionId === session.id
   const busyElsewhere = isRunning && !busyHere
@@ -427,7 +433,7 @@ export function EditStudio({
                     className={`flex items-center gap-1.5 text-[11px] ${referenceCount > 0 ? 'text-zinc-400' : 'text-zinc-600'}`}
                     title={
                       referenceCount > 0
-                        ? 'Also send your reference photos so the face stays consistent'
+                        ? 'Also send your reference photos so the face stays consistent — point at one with @1, @2, … in an instruction'
                         : 'No reference photos added on the main page'
                     }
                   >
@@ -464,6 +470,16 @@ export function EditStudio({
                 <p className="mt-1.5 text-[11px] text-amber-400">
                   Only changes around the arrows are kept — turn off “only around arrows” to apply this to the whole
                   picture.
+                </p>
+              )}
+              {unsentMentions.length > 0 && (
+                <p className="mt-1.5 text-[11px] text-amber-400">
+                  {unsentMentions.map((n) => `@${n}`).join(', ')}{' '}
+                  {referenceCount === 0
+                    ? 'points at a reference photo, but none are added on the main page.'
+                    : !sendingReferences
+                      ? 'points at a reference photo — tick “+ reference photos” to send them along.'
+                      : `points at no photo — there ${referenceCount === 1 ? 'is only 1' : `are only ${referenceCount}`}.`}
                 </p>
               )}
               <p className="mt-1.5 text-[10px] text-zinc-600">

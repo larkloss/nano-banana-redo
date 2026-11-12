@@ -2,6 +2,7 @@ import type { ParsedImagePart, ParsedResponse, Settings } from '../types'
 import type { GenerateCaller } from './gemini'
 import { base64ToBlob } from './imageUtils'
 import { isModerationMessage } from './errors'
+import { withNumberedReferences } from './mentions'
 
 const GENERATE_ENDPOINT = 'https://api.x.ai/v1/images/generations'
 const EDIT_ENDPOINT = 'https://api.x.ai/v1/images/edits'
@@ -66,7 +67,8 @@ export const callGenerateXai: GenerateCaller = async ({ apiKey, settings, refere
   const modelId = effectiveXaiModelId(settings)
   const base = {
     model: modelId,
-    prompt: settings.prompt,
+    // "@2" points at the second source image
+    prompt: withNumberedReferences(settings.prompt, Math.min(references.length, MAX_XAI_SOURCES)),
     response_format: 'b64_json',
     resolution: settings.xaiResolution,
     ...(supportsXaiQuality(modelId) ? { quality: settings.xaiQuality } : {}),
