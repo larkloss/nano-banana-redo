@@ -12,6 +12,7 @@ import type { LocalEditInfo } from '../lib/localEdit'
 import { createLocalEditor, makeLocalEditCaller, type LocalEditor } from '../lib/localEditClient'
 import { base64ToBlob, processImagePart } from '../lib/imageUtils'
 import { blobToBase64 } from '../edit/lib/mask'
+import { cropFromFrame, frameForModel, marksInFrame } from '../lib/frame'
 
 // One picture's edit history. Version 0 is the picture the chain started
 // from; every successful edit adds a version, and any version can be the
@@ -176,8 +177,6 @@ export function useEditStudio({ settings, references, onResult }: Options) {
       // With marks, the guide image takes the second slot
       const guideSlots = turn.marks.length > 0 ? 1 : 0
       const extras = turn.withReferences ? references.slice(0, Math.max(0, maxSources - 1 - guideSlots)) : []
-      const prompt = buildEditPrompt(turn.prompt, turn.marks, extras.length)
-      const singleSourcePrompt = turn.marks.length > 0 ? buildSingleSourcePrompt(turn.prompt, turn.marks) : undefined
 
       busyRef.current = true
       cancelledRef.current = false
@@ -189,6 +188,16 @@ export function useEditStudio({ settings, references, onResult }: Options) {
       try {
         if (local) job = await createLocalEditor(source.image.blob, turn.marks)
         const localJob = job
+        // A picture in a shape the model can't answer in (an upload) goes
+        // inside a frame of a shape it can, and is cut back out of the answer
+        const frame = local ? await frameForModel(source.image, turn.modelId) : null
+        const sent = frame
+          ? { ...source.image, blob: frame.blob, mimeType: frame.blob.type, width: frame.width, height: frame.height }
+          : source.image
+        const sentMarks = frame ? marksInFrame(turn.marks, frame) : turn.marks
+        const prompt = buildEditPrompt(turn.prompt, sentMarks, extras.length)
+        const singleSourcePrompt =
+          turn.marks.length > 0 ? buildSingleSourcePrompt(turn.prompt, sentMarks) : undefined
         const runSettings: Settings = {
           ...settings,
           modelId: turn.modelId,
@@ -200,14 +209,14 @@ export function useEditStudio({ settings, references, onResult }: Options) {
           prompt,
           targetCount: turn.candidates,
           // Edits keep the picture's own framing
-          aspectRatio: 'auto',
-          ...(local ? localSettings(source.image) : {}),
+          aspectRatio: frame ? frame.ratio : 'auto',
+          ...(local ? localSettings(sent) : {}),
         }
 
         let firstResult = true
         let delivered = 0
         const prepareSources = async () => {
-          const guide = turn.marks.length > 0 ? await renderGuide(source.image.blob, turn.marks) : null
+          const guide = turn.marks.length > 0 ? await renderGuide(sent.blob, sentMarks) : null
           if (guide) {
             const guideUrl = URL.createObjectURL(guide.blob)
             patchSession(sessionId, (s) => ({
@@ -216,7 +225,7 @@ export function useEditStudio({ settings, references, onResult }: Options) {
             }))
           }
           const sources = [
-            await imageToReference(source.image),
+            await imageToReference(sent),
             ...(guide ? [{ base64: guide.base64, mimeType: guide.mimeType }] : []),
             ...extras.map(({ base64, mimeType }) => ({ base64, mimeType })),
           ]
@@ -270,7 +279,10 @@ export function useEditStudio({ settings, references, onResult }: Options) {
           },
           {
             singleSourcePrompt,
-            wrapCaller: localJob ? (caller) => makeLocalEditCaller(caller, localJob) : undefined,
+            wrapCaller: localJob
+              ? (caller) =>
+                  makeLocalEditCaller(caller, localJob, frame ? (answer) => cropFromFrame(answer, frame) : undefined)
+              : undefined,
           },
         )
 

@@ -23,17 +23,38 @@ export function Gallery({ images, onClear, onEdit, onUpload, pasteEnabled, isRun
   const [uploading, setUploading] = useState(false)
   const [uploadNotes, setUploadNotes] = useState<string[]>([])
   const [dropping, setDropping] = useState(false)
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null)
+  // Pictures that arrive while earlier ones are still being opened wait
+  // their turn rather than being dropped
+  const busy = useRef(false)
+  const waiting = useRef<File[]>([])
   const upload = useCallback(
     (list: FileList | File[] | null | undefined) => {
       const files = Array.from(list ?? [])
-      if (files.length === 0 || uploading) return
+      if (files.length === 0) return
+      if (busy.current) {
+        waiting.current.push(...files)
+        return
+      }
+      busy.current = true
       setUploading(true)
       setUploadNotes([])
-      void onUpload(files)
-        .then(setUploadNotes)
-        .finally(() => setUploading(false))
+      // the studio is about to open: not underneath a zoomed picture
+      setLightboxIndex(null)
+      void (async () => {
+        const notes: string[] = []
+        try {
+          for (let batch = files; batch.length > 0; batch = waiting.current.splice(0)) {
+            notes.push(...(await onUpload(batch)))
+          }
+        } finally {
+          busy.current = false
+          setUploading(false)
+          setUploadNotes(notes)
+        }
+      })()
     },
-    [onUpload, uploading],
+    [onUpload],
   )
   // A copied picture or screenshot can simply be pasted
   useEffect(() => {
@@ -41,16 +62,38 @@ export function Gallery({ images, onClear, onEdit, onUpload, pasteEnabled, isRun
     const onPaste = (e: ClipboardEvent) => {
       const files = Array.from(e.clipboardData?.files ?? []).filter((f) => f.type.startsWith('image/'))
       if (files.length === 0) return
+      // Office apps put a bitmap next to the copied text: in a text field,
+      // the text is what was meant
+      const target = e.target
+      const inField =
+        target instanceof HTMLElement && (target.isContentEditable || target.closest('textarea, input') !== null)
+      if (inField && e.clipboardData?.types.includes('text/plain')) return
       e.preventDefault()
       upload(files)
     }
     window.addEventListener('paste', onPaste)
     return () => window.removeEventListener('paste', onPaste)
   }, [pasteEnabled, upload])
-  // Pictures can also be dropped anywhere on the gallery
+  // Pictures can also be dropped anywhere on the gallery — files from
+  // outside, that is: dragging one of the page's own pictures also carries a
+  // file in Chrome, and must not come back as an upload of itself
+  const ownDrag = useRef(false)
+  useEffect(() => {
+    const started = () => (ownDrag.current = true)
+    const ended = () => (ownDrag.current = false)
+    window.addEventListener('dragstart', started, true)
+    // (dragend comes after the drop; pointerdown in case it never comes)
+    window.addEventListener('dragend', ended, true)
+    window.addEventListener('pointerdown', ended, true)
+    return () => {
+      window.removeEventListener('dragstart', started, true)
+      window.removeEventListener('dragend', ended, true)
+      window.removeEventListener('pointerdown', ended, true)
+    }
+  }, [])
   const dropZone = {
     onDragOver: (e: React.DragEvent) => {
-      if (!e.dataTransfer.types.includes('Files')) return
+      if (ownDrag.current || !e.dataTransfer.types.includes('Files')) return
       e.preventDefault()
       setDropping(true)
     },
@@ -58,7 +101,7 @@ export function Gallery({ images, onClear, onEdit, onUpload, pasteEnabled, isRun
       if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDropping(false)
     },
     onDrop: (e: React.DragEvent) => {
-      if (!e.dataTransfer.types.includes('Files')) return
+      if (ownDrag.current || !e.dataTransfer.types.includes('Files')) return
       e.preventDefault()
       setDropping(false)
       upload(e.dataTransfer.files)
@@ -80,8 +123,8 @@ export function Gallery({ images, onClear, onEdit, onUpload, pasteEnabled, isRun
   const notes = uploadNotes.length > 0 && (
     <div className="mb-3 flex items-start gap-2 rounded-2xl border border-amber-500/30 bg-amber-500/10 px-3.5 py-2 text-xs text-amber-400">
       <div className="min-w-0 flex-1 space-y-0.5">
-        {uploadNotes.map((note) => (
-          <p key={note}>{note}</p>
+        {uploadNotes.map((note, i) => (
+          <p key={i}>{note}</p>
         ))}
       </div>
       <button type="button" onClick={() => setUploadNotes([])} className="shrink-0 hover:text-amber-300" title="Dismiss">
@@ -89,7 +132,6 @@ export function Gallery({ images, onClear, onEdit, onUpload, pasteEnabled, isRun
       </button>
     </div>
   )
-  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null)
   const [zipping, setZipping] = useState(false)
   const [confirmClear, setConfirmClear] = useState(false)
   // A pending "Remove all?" must not survive into a run that has started

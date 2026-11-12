@@ -125,24 +125,29 @@ function probeVideo(url: string): Promise<{ width: number; height: number; durat
 const MAX_UPLOAD_SIDE = 4096
 
 // Brings one of the user's own pictures into the gallery so it can be
-// edited. PNGs and upright JPEGs are kept byte for byte; anything else (a
-// phone photo stored sideways, WebP, GIF, AVIF, an oversized picture) is
-// redrawn the way the browser shows it and kept as a lossless PNG, so the
-// providers and the "only around the arrows" compositor all see the same
-// pixels. Throws when the browser can't read the file as a picture.
+// edited. A PNG or JPEG that is stored upright is kept byte for byte.
+// Anything else — a phone photo stored sideways, WebP, GIF, AVIF, an
+// oversized picture, a file whose name lies about what it is — is redrawn
+// the way the browser shows it, so the gallery, the providers and the "only
+// around the arrows" compositor all see the same pixels: as a high-quality
+// JPEG if it was one (a phone photo as PNG is ten times the size), as a
+// lossless PNG otherwise. Throws when the browser can't read the file as a
+// picture.
 export async function uploadToImage(file: File): Promise<{ image: GeneratedImage; note: string | null }> {
   const bitmap = await createImageBitmap(file)
   try {
-    const actual = await sniffImageMimeType(file, file.type)
+    // Only the bytes say what a file is; its name and declared type don't
+    const actual = await sniffImageMimeType(file, '')
     const long = Math.max(bitmap.width, bitmap.height)
     const scale = Math.min(1, MAX_UPLOAD_SIDE / long)
-    const asIs =
-      scale === 1 && (actual === 'image/png' || (actual === 'image/jpeg' && (await jpegOrientation(file)) === 1))
+    const asIs = scale === 1 && (actual === 'image/png' || actual === 'image/jpeg') && (await storedUpright(file, actual))
     let blob: Blob
     let width = bitmap.width
     let height = bitmap.height
     if (asIs) {
-      blob = file.type === actual ? file : new Blob([file], { type: actual })
+      // A copy: the File itself stays tied to the file on disk, and stops
+      // being readable the moment that is moved, re-saved or deleted
+      blob = new Blob([await file.arrayBuffer()], { type: actual })
     } else {
       width = Math.max(1, Math.round(bitmap.width * scale))
       height = Math.max(1, Math.round(bitmap.height * scale))
@@ -150,7 +155,9 @@ export async function uploadToImage(file: File): Promise<{ image: GeneratedImage
       const ctx = canvas.getContext('2d')!
       ctx.imageSmoothingQuality = 'high'
       ctx.drawImage(bitmap, 0, 0, width, height)
-      blob = await canvas.convertToBlob({ type: 'image/png' })
+      blob = await canvas.convertToBlob(
+        actual === 'image/jpeg' ? { type: 'image/jpeg', quality: 0.95 } : { type: 'image/png' },
+      )
     }
     const image: GeneratedImage = {
       id: crypto.randomUUID(),
@@ -176,32 +183,64 @@ export async function uploadToImage(file: File): Promise<{ image: GeneratedImage
   }
 }
 
-// EXIF orientation of a JPEG (1 = stored upright, also when there is none)
-async function jpegOrientation(blob: Blob): Promise<number> {
-  const view = new DataView(await blob.slice(0, 256 * 1024).arrayBuffer())
-  if (view.byteLength < 4 || view.getUint16(0) !== 0xffd8) return 1
-  let offset = 2
-  while (offset + 4 <= view.byteLength) {
-    const marker = view.getUint16(offset)
-    if ((marker & 0xff00) !== 0xff00 || marker === 0xffda) break
-    const size = view.getUint16(offset + 2)
-    // APP1 segment starting with "Exif"
-    if (marker === 0xffe1 && offset + 18 <= view.byteLength && view.getUint32(offset + 4) === 0x45786966) {
-      const tiff = offset + 10
-      const little = view.getUint16(tiff) === 0x4949
-      const ifd = tiff + view.getUint32(tiff + 4, little)
-      if (ifd + 2 > view.byteLength) return 1
-      const count = view.getUint16(ifd, little)
-      for (let i = 0; i < count; i++) {
-        const entry = ifd + 2 + i * 12
-        if (entry + 12 > view.byteLength) return 1
-        if (view.getUint16(entry, little) === 0x0112) return view.getUint16(entry + 8, little)
+// Whether a PNG or JPEG is stored the way it is shown: no EXIF orientation
+// other than "upright". When the file can't be followed, the answer is no —
+// redrawing an upright picture costs little, sending a sideways one a lot.
+async function storedUpright(blob: Blob, type: string): Promise<boolean> {
+  const read = async (offset: number, length: number) =>
+    new DataView(await blob.slice(offset, offset + length).arrayBuffer())
+  try {
+    let exif: DataView | null = null
+    if (type === 'image/jpeg') {
+      // Segments up to the picture data; EXIF is an APP1 segment starting "Exif\0\0"
+      let offset = 2
+      for (let guard = 0; guard < 200 && exif === null; guard++) {
+        let head = await read(offset, 10)
+        // any number of 0xFF fill bytes may precede a marker
+        while (head.byteLength >= 2 && head.getUint8(0) === 0xff && head.getUint8(1) === 0xff) {
+          offset += 1
+          head = await read(offset, 10)
+        }
+        if (head.byteLength < 4 || head.getUint8(0) !== 0xff) return false
+        const marker = head.getUint8(1)
+        if (marker === 0xda || marker === 0xd9) return true
+        const size = head.getUint16(2)
+        if (size < 2) return false
+        if (marker === 0xe1 && head.byteLength >= 10 && head.getUint32(4) === 0x45786966) {
+          exif = await read(offset + 10, size - 8)
+        }
+        offset += 2 + size
       }
-      return 1
+      if (exif === null) return false
+    } else {
+      // Chunks up to the picture data; EXIF is an "eXIf" chunk
+      let offset = 8
+      for (let guard = 0; guard < 200 && exif === null; guard++) {
+        const head = await read(offset, 8)
+        if (head.byteLength < 8) return false
+        const length = head.getUint32(0)
+        const name = head.getUint32(4)
+        if (name === 0x49444154 || name === 0x49454e44) return true // IDAT, IEND
+        if (name === 0x65584966) exif = await read(offset + 8, length)
+        offset += 12 + length
+      }
+      if (exif === null) return false
     }
-    offset += 2 + size
+    // TIFF header, then the first directory's entries: tag 0x0112 is orientation
+    if (exif.byteLength < 8) return true
+    const little = exif.getUint16(0) === 0x4949
+    const ifd = exif.getUint32(4, little)
+    if (ifd + 2 > exif.byteLength) return true
+    const count = exif.getUint16(ifd, little)
+    for (let i = 0; i < count; i++) {
+      const entry = ifd + 2 + i * 12
+      if (entry + 12 > exif.byteLength) break
+      if (exif.getUint16(entry, little) === 0x0112) return exif.getUint16(entry + 8, little) === 1
+    }
+    return true
+  } catch {
+    return false
   }
-  return 1
 }
 
 // Who made a picture, for labels: the model's name, or "Uploaded"

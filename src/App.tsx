@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useSettings } from './hooks/useSettings'
 import { usePromptFileSync } from './hooks/usePromptFileSync'
 import type { PromptFilePayload } from './lib/promptFile'
@@ -17,7 +17,6 @@ import { getModel } from './lib/models'
 import { MAX_XAI_SOURCES } from './lib/xai'
 import { MAX_OPENAI_SOURCES } from './lib/openai'
 import { uploadToImage } from './lib/imageUtils'
-import type { GeneratedImage } from './types'
 
 // More than this in one go is almost certainly a wrong folder
 const MAX_UPLOADS = 12
@@ -42,16 +41,24 @@ function App() {
   // The user's own pictures: into the gallery like any other, and the first
   // one straight into the edit studio
   const { open: openStudio } = studio
+  // Whether the studio is showing something right now (a batch of big photos
+  // takes a few seconds to open — time enough to have started editing)
+  const studioOpen = useRef(false)
+  useEffect(() => {
+    studioOpen.current = studio.openSession !== null
+  }, [studio.openSession])
   const uploadPictures = useCallback(
     async (files: File[]) => {
       const notes: string[] = []
       if (files.length > MAX_UPLOADS) notes.push(`Only the first ${MAX_UPLOADS} pictures were added.`)
-      let first: GeneratedImage | null = null
+      let opened = false
       for (const file of files.slice(0, MAX_UPLOADS)) {
         try {
           const { image, note } = await uploadToImage(file)
           addImage(image)
-          first ??= image
+          // straight into the studio — unless the user is already in it
+          if (!opened && !studioOpen.current) openStudio(image)
+          opened = true
           if (note) notes.push(note)
         } catch {
           notes.push(
@@ -60,7 +67,6 @@ function App() {
           )
         }
       }
-      if (first) openStudio(first)
       return notes
     },
     [addImage, openStudio],
@@ -119,6 +125,20 @@ function App() {
           : 'Enter a prompt first.'
         : null
   const canRun = runDisabledHint === null
+
+  // A file dropped beside a drop target must not make the browser open it
+  // in place of the app (and everything in this session)
+  useEffect(() => {
+    const swallow = (e: DragEvent) => {
+      if (e.dataTransfer?.types.includes('Files')) e.preventDefault()
+    }
+    window.addEventListener('dragover', swallow)
+    window.addEventListener('drop', swallow)
+    return () => {
+      window.removeEventListener('dragover', swallow)
+      window.removeEventListener('drop', swallow)
+    }
+  }, [])
 
   // Warn before closing the tab mid-run (a generation or an edit)
   const anyRunning = isRunning || studio.isRunning

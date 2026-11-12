@@ -104,14 +104,25 @@ async function inThreadEditor(source: Blob, marks: EditMark[]): Promise<LocalEdi
 // the retry engine sees it, or a failed attempt when it can't be used (so the
 // retry loop simply tries again). Stop works here too: a composite still
 // being worked on when it's pressed is dropped.
-export function makeLocalEditCaller(inner: GenerateCaller, editor: LocalEditor): GenerateCaller {
+// `unframe`: for a picture that was sent inside a frame (see frame.ts), cuts
+// the picture itself back out of each answer first.
+export function makeLocalEditCaller(
+  inner: GenerateCaller,
+  editor: LocalEditor,
+  unframe?: (answer: Blob) => Promise<Blob>,
+): GenerateCaller {
   return async (params, signal) => {
     const parsed = await inner(params, signal)
     if (parsed.images.length === 0) return parsed
-    const raw = parsed.images[0]
+    let raw = parsed.images[0]
     let outcome: LocalComposite
     try {
-      outcome = await untilAborted(editor.compose(base64ToBlob(raw.base64, raw.mimeType)), signal)
+      let answer = base64ToBlob(raw.base64, raw.mimeType)
+      if (unframe) {
+        answer = await untilAborted(unframe(answer), signal)
+        raw = { base64: await blobToBase64(answer), mimeType: answer.type }
+      }
+      outcome = await untilAborted(editor.compose(answer), signal)
     } catch (err) {
       if (signal.aborted || err instanceof EditorDead) throw err
       // An answer that can't be read is one failed attempt, not the end

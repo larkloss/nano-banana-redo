@@ -43,7 +43,8 @@ export function Lightbox({ images, index, onClose, onNavigate, onEdit }: Props) 
         ) : (
           <img
             src={image.objectUrl}
-            alt={`Generated ${index + 1}`}
+            alt={image.uploaded ? `Uploaded ${index + 1}` : `Generated ${index + 1}`}
+            draggable={false}
             className="max-h-[85vh] max-w-full rounded-2xl object-contain"
           />
         )}
