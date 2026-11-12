@@ -255,7 +255,7 @@ export function makeFilename(image: GeneratedImage, index: number): string {
     const ext = image.mimeType.includes('webm') ? 'webm' : 'mp4'
     return `abigail-${slug}_${stamp}_${String(index + 1).padStart(2, '0')}.${ext}`
   }
-  const ext = image.format === 'jpg' ? 'jpg' : 'png'
+  const ext = (image.saveAs ?? image.format) === 'jpg' ? 'jpg' : 'png'
   const stamp = new Date(image.createdAt).toISOString().slice(0, 19).replace(/[:T]/g, '-')
   const slug = image.uploaded ? 'upload' : getModel(image.modelId).filenameSlug
   const edit = image.edit ? `-edit-v${image.edit.version}` : ''
@@ -271,9 +271,45 @@ export function downloadBlob(blob: Blob, filename: string): void {
   setTimeout(() => URL.revokeObjectURL(url), 10000)
 }
 
+// The bytes a picture is saved as. Usually the ones it is held in; a
+// lossless working copy (see `saveAs`) is encoded once, on the way out — as
+// a high-quality JPEG it is a few MB instead of the 10–20 MB of a PNG that
+// holds nothing more.
+const SAVE_QUALITY = 0.95
+const encoded = new WeakMap<Blob, Promise<Blob>>()
+export function exportBlob(image: GeneratedImage): Promise<Blob> {
+  if (image.kind !== 'image' || image.saveAs !== 'jpg' || image.mimeType === 'image/jpeg') {
+    return Promise.resolve(image.blob)
+  }
+  let pending = encoded.get(image.blob)
+  if (!pending) {
+    pending = createImageBitmap(image.blob).then(async (bitmap) => {
+      try {
+        return await toJpeg(bitmap, SAVE_QUALITY)
+      } finally {
+        bitmap.close()
+      }
+    })
+    encoded.set(image.blob, pending)
+    // a failed encode is not remembered
+    pending.catch(() => encoded.delete(image.blob))
+  }
+  return pending
+}
+
+// What the download will be, for labels
+export function saveFormat(image: GeneratedImage): string {
+  return image.kind === 'video' ? 'MP4' : (image.saveAs ?? image.format).toUpperCase()
+}
+
+export async function downloadImage(image: GeneratedImage, index: number): Promise<void> {
+  downloadBlob(await exportBlob(image), makeFilename(image, index))
+}
+
 export async function downloadAllAsZip(images: GeneratedImage[]): Promise<void> {
   const zip = new JSZip()
-  images.forEach((img, i) => zip.file(makeFilename(img, i), img.blob))
+  const blobs = await Promise.all(images.map(exportBlob))
+  images.forEach((img, i) => zip.file(makeFilename(img, i), blobs[i]))
   const blob = await zip.generateAsync({ type: 'blob' })
   downloadBlob(blob, `abigail-chase_${Date.now()}.zip`)
 }

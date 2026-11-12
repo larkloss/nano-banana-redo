@@ -3,7 +3,7 @@ import type { RunState, Settings } from '../../types'
 import { studioReferenceSlots } from '../../hooks/useEditStudio'
 import type { EditRequest, EditSession, EditTurn, EditVersion } from '../../hooks/useEditStudio'
 import { MODELS, PROVIDER_LABELS, PROVIDER_ORDER, getModel } from '../../lib/models'
-import { downloadBlob, makeFilename, sourceLabel } from '../../lib/imageUtils'
+import { downloadImage, saveFormat, sourceLabel } from '../../lib/imageUtils'
 import { friendlyReason } from '../../lib/friendly'
 import { MAX_MARKS, markColor, summarizeEdit, type EditMark } from '../../lib/annotate'
 import { mentionedNumbers } from '../../lib/mentions'
@@ -282,7 +282,8 @@ export function EditStudio({
               )}
               <button
                 type="button"
-                onClick={() => downloadBlob(selected.image.blob, makeFilename(selected.image, 0))}
+                onClick={() => void downloadImage(selected.image, 0)}
+                title={`Download ${saveFormat(selected.image)}`}
                 className="rounded-xl border border-zinc-700 px-3 py-1.5 text-xs text-zinc-300 hover:bg-zinc-800"
               >
                 ↓ Download {versionLabel(selected)}

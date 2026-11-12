@@ -1,6 +1,6 @@
 import type { GeneratedImage } from '../../types'
 import { getModel } from '../../lib/models'
-import { downloadBlob, makeFilename, sourceLabel } from '../../lib/imageUtils'
+import { downloadImage, saveFormat, sourceLabel } from '../../lib/imageUtils'
 
 interface Props {
   image: GeneratedImage
@@ -76,9 +76,9 @@ export function ImageCard({ image, index, onOpen, onEdit }: Props) {
         )}
         <button
           type="button"
-          onClick={() => downloadBlob(image.blob, makeFilename(image, index))}
+          onClick={() => void downloadImage(image, index)}
           className="shrink-0 rounded-full px-2 py-1 text-[11px] text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
-          title={`Download ${image.kind === 'video' ? 'MP4' : image.format.toUpperCase()}`}
+          title={`Download ${saveFormat(image)}`}
         >
           ↓
         </button>

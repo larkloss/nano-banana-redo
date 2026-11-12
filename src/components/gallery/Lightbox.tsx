@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import type { GeneratedImage } from '../../types'
-import { downloadBlob, makeFilename } from '../../lib/imageUtils'
+import { downloadImage } from '../../lib/imageUtils'
 
 interface Props {
   images: GeneratedImage[]
@@ -63,7 +63,7 @@ export function Lightbox({ images, index, onClose, onNavigate, onEdit }: Props) 
           )}
           <button
             type="button"
-            onClick={() => downloadBlob(image.blob, makeFilename(image, index))}
+            onClick={() => void downloadImage(image, index)}
             className="rounded-full bg-white/10 px-3.5 py-1.5 text-white hover:bg-white/20"
           >
             Download

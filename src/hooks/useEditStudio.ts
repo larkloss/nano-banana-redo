@@ -261,6 +261,9 @@ export function useEditStudio({ settings, references, onResult }: Options) {
             const tagged: GeneratedImage = {
               ...image,
               edit: { sessionId, version: number, prompt: summarizeEdit(turn.prompt, turn.marks) },
+              // held as a lossless PNG so further edits don't wear it down;
+              // downloaded in the format the user asked for
+              ...(extra && settings.format !== image.format ? { saveAs: settings.format } : {}),
             }
             const version: EditVersion = {
               id: crypto.randomUUID(),
