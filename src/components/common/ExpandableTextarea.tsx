@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { MentionTextarea } from './MentionTextarea'
 
 interface Props {
   value: string
@@ -22,13 +23,12 @@ export function ExpandableTextarea({ value, onChange, label, disabled, placehold
 
   return (
     <div className="relative">
-      <textarea
+      <MentionTextarea
         value={value}
-        onChange={(e) => onChange(e.target.value)}
+        onChange={onChange}
         disabled={disabled}
         placeholder={placeholder}
         rows={rows}
-        spellCheck={false}
         className={className}
       />
       {!disabled && (
@@ -103,12 +103,11 @@ function ExpandedEditor({
             ✕
           </button>
         </div>
-        <textarea
-          ref={textareaRef}
+        <MentionTextarea
+          textareaRef={textareaRef}
           value={value}
-          onChange={(e) => onChange(e.target.value)}
+          onChange={onChange}
           placeholder={placeholder}
-          spellCheck={false}
           className="min-h-0 w-full flex-1 resize-none rounded-md border border-zinc-700 bg-zinc-950 p-3 text-sm leading-relaxed text-zinc-200 placeholder-zinc-600 outline-none focus:border-blue-500"
         />
         <div className="mt-3 flex items-center justify-between">

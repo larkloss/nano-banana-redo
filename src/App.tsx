@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useSettings } from './hooks/useSettings'
 import { usePromptFileSync } from './hooks/usePromptFileSync'
 import type { PromptFilePayload } from './lib/promptFile'
@@ -16,6 +16,10 @@ import { isMockMode } from './lib/mockGemini'
 import { getModel } from './lib/models'
 import { MAX_XAI_SOURCES } from './lib/xai'
 import { MAX_OPENAI_SOURCES } from './lib/openai'
+import { uploadToImage } from './lib/imageUtils'
+
+// More than this in one go is almost certainly a wrong folder
+const MAX_UPLOADS = 12
 
 function App() {
   const { settings, update, replaceSettings, provider, apiKeys, setApiKey } = useSettings()
@@ -34,6 +38,39 @@ function App() {
   const { runState, images, start, stop, addImage, clearImages, isRunning } = useGenerationEngine()
   const [references, setReferences] = usePersistedReferences('generator')
   const studio = useEditStudio({ settings, references, onResult: addImage })
+  // The user's own pictures: into the gallery like any other, and the first
+  // one straight into the edit studio
+  const { open: openStudio } = studio
+  // Whether the studio is showing something right now (a batch of big photos
+  // takes a few seconds to open — time enough to have started editing)
+  const studioOpen = useRef(false)
+  useEffect(() => {
+    studioOpen.current = studio.openSession !== null
+  }, [studio.openSession])
+  const uploadPictures = useCallback(
+    async (files: File[]) => {
+      const notes: string[] = []
+      if (files.length > MAX_UPLOADS) notes.push(`Only the first ${MAX_UPLOADS} pictures were added.`)
+      let opened = false
+      for (const file of files.slice(0, MAX_UPLOADS)) {
+        try {
+          const { image, note } = await uploadToImage(file)
+          addImage(image)
+          // straight into the studio — unless the user is already in it
+          if (!opened && !studioOpen.current) openStudio(image)
+          opened = true
+          if (note) notes.push(note)
+        } catch {
+          notes.push(
+            `${file.name || 'That file'} couldn’t be opened — this browser can’t read it as a picture. ` +
+              'Try saving it as a JPG or PNG first.',
+          )
+        }
+      }
+      return notes
+    },
+    [addImage, openStudio],
+  )
   const [theme, setTheme] = useState<Theme>(loadTheme)
   const toggleTheme = () => {
     const next = theme === 'light' ? 'dark' : 'light'
@@ -69,6 +106,12 @@ function App() {
               'aspect ratio unless you pick a specific ratio above.'
             : 'Grok will edit from this image. On "Auto" the output keeps the source ratio — pick a specific ratio to override it.'
 
+  const maxReferences =
+    provider === 'xai'
+      ? MAX_XAI_SOURCES
+      : provider === 'openai'
+        ? MAX_OPENAI_SOURCES
+        : getModel(settings.modelId).maxReferences
   const mock = isMockMode()
   const activeKeys = mock
     ? apiKeys.filter(Boolean).length > 0
@@ -88,6 +131,20 @@ function App() {
           : 'Enter a prompt first.'
         : null
   const canRun = runDisabledHint === null
+
+  // A file dropped beside a drop target must not make the browser open it
+  // in place of the app (and everything in this session)
+  useEffect(() => {
+    const swallow = (e: DragEvent) => {
+      if (e.dataTransfer?.types.includes('Files')) e.preventDefault()
+    }
+    window.addEventListener('dragover', swallow)
+    window.addEventListener('drop', swallow)
+    return () => {
+      window.removeEventListener('dragover', swallow)
+      window.removeEventListener('drop', swallow)
+    }
+  }, [])
 
   // Warn before closing the tab mid-run (a generation or an edit)
   const anyRunning = isRunning || studio.isRunning
@@ -137,13 +194,7 @@ function App() {
           references={references}
           onReferencesChange={setReferences}
           referenceNote={referenceNote}
-          maxReferences={
-            provider === 'xai'
-              ? MAX_XAI_SOURCES
-              : provider === 'openai'
-                ? MAX_OPENAI_SOURCES
-                : getModel(settings.modelId).maxReferences
-          }
+          maxReferences={maxReferences}
           singleBox={isVideoModel}
           disabled={isRunning}
         />
@@ -154,10 +205,18 @@ function App() {
           runDisabledHint={runDisabledHint}
           noun={noun}
           runLabel={runLabel}
-          onRun={() => void start(activeKeys, { ...settings, prompt: effectivePrompt }, references)}
+          // (only as many reference photos as the model takes — the ones numbered in the strip)
+          onRun={() => void start(activeKeys, { ...settings, prompt: effectivePrompt }, references.slice(0, maxReferences))}
           onStop={stop}
         />
-        <Gallery images={images} onClear={clearImages} onEdit={studio.open} isRunning={isRunning} />
+        <Gallery
+          images={images}
+          onClear={clearImages}
+          onEdit={studio.open}
+          onUpload={uploadPictures}
+          pasteEnabled={!studio.openSession}
+          isRunning={isRunning}
+        />
       </main>
       {studio.openSession && (
         <EditStudio

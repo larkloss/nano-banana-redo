@@ -9,9 +9,10 @@ import { MAX_XAI_SOURCES } from '../lib/xai'
 import { MAX_OPENAI_SOURCES } from '../lib/openai'
 import { buildEditPrompt, buildSingleSourcePrompt, renderGuide, summarizeEdit, type EditMark } from '../lib/annotate'
 import type { LocalEditInfo } from '../lib/localEdit'
-import { createLocalEditor, makeLocalEditCaller, type LocalEditor } from '../lib/localEditClient'
+import { createLocalEditor, makeLocalEditCaller, type Framing, type LocalEditor } from '../lib/localEditClient'
 import { base64ToBlob, processImagePart } from '../lib/imageUtils'
 import { blobToBase64 } from '../edit/lib/mask'
+import { cropFromFrame, frameForModel, frameTo, learnShape, marksInFrame, type Frame } from '../lib/frame'
 
 // One picture's edit history. Version 0 is the picture the chain started
 // from; every successful edit adds a version, and any version can be the
@@ -167,17 +168,9 @@ export function useEditStudio({ settings, references, onResult }: Options) {
 
       // The picture being edited always goes first; reference photos ride
       // along behind it when asked for, within the provider's source limit
-      const maxSources =
-        model.provider === 'xai'
-          ? MAX_XAI_SOURCES
-          : model.provider === 'openai'
-            ? MAX_OPENAI_SOURCES
-            : model.maxReferences
-      // With marks, the guide image takes the second slot
-      const guideSlots = turn.marks.length > 0 ? 1 : 0
-      const extras = turn.withReferences ? references.slice(0, Math.max(0, maxSources - 1 - guideSlots)) : []
-      const prompt = buildEditPrompt(turn.prompt, turn.marks, extras.length)
-      const singleSourcePrompt = turn.marks.length > 0 ? buildSingleSourcePrompt(turn.prompt, turn.marks) : undefined
+      const extras = turn.withReferences
+        ? references.slice(0, studioReferenceSlots(turn.modelId, turn.marks.length > 0))
+        : []
 
       busyRef.current = true
       cancelledRef.current = false
@@ -189,45 +182,75 @@ export function useEditStudio({ settings, references, onResult }: Options) {
       try {
         if (local) job = await createLocalEditor(source.image.blob, turn.marks)
         const localJob = job
-        const runSettings: Settings = {
-          ...settings,
-          modelId: turn.modelId,
-          // An empty override would be ignored anyway; a stale one for another
-          // provider must not leak into this request
-          // The typed model ID override belongs to the main settings' model;
-          // picking a different model in the studio must actually switch
-          xaiModelId: turn.modelId === settings.modelId ? settings.xaiModelId : '',
-          prompt,
-          targetCount: turn.candidates,
-          // Edits keep the picture's own framing
-          aspectRatio: 'auto',
-          ...(local ? localSettings(source.image) : {}),
+        // What is sent. A picture in a shape the model can't answer in (most
+        // uploads) goes inside a frame of a shape it can, with the arrows
+        // moved to match, and is cut back out of the answer.
+        const requestFor = async (frame: Frame | null) => {
+          const sent = frame
+            ? { ...source.image, blob: frame.blob, mimeType: frame.blob.type, width: frame.width, height: frame.height }
+            : source.image
+          const sentMarks = frame ? marksInFrame(turn.marks, frame) : turn.marks
+          const guide = turn.marks.length > 0 ? await renderGuide(sent.blob, sentMarks) : null
+          const requestSettings: Settings = {
+            ...settings,
+            modelId: turn.modelId,
+            // The typed model ID override belongs to the main settings' model;
+            // picking a different model in the studio must actually switch
+            xaiModelId: turn.modelId === settings.modelId ? settings.xaiModelId : '',
+            prompt: buildEditPrompt(turn.prompt, sentMarks, extras.length),
+            // (which already says which attached image is which)
+            imagesExplained: true,
+            targetCount: turn.candidates,
+            // Edits keep the picture's own framing
+            aspectRatio: frame ? frame.ratio : 'auto',
+            ...(local ? localSettings(sent) : {}),
+          }
+          return {
+            settings: requestSettings,
+            singleSourcePrompt:
+              turn.marks.length > 0 ? buildSingleSourcePrompt(turn.prompt, sentMarks) : undefined,
+            references: [
+              await imageToReference(sent),
+              ...(guide ? [{ base64: guide.base64, mimeType: guide.mimeType }] : []),
+              ...extras.map(({ base64, mimeType }) => ({ base64, mimeType })),
+            ],
+            guide,
+          }
         }
+        const framing: Framing | undefined = local
+          ? {
+              frame: await frameForModel(source.image, turn.modelId),
+              request: requestFor,
+              unframe: (answer, frame) => cropFromFrame(answer, frame, turn.modelId),
+              reframe: async (width, height) => {
+                const shape = learnShape(turn.modelId, width, height)
+                return shape ? frameTo(source.image, shape) : null
+              },
+            }
+          : undefined
 
         let firstResult = true
         let delivered = 0
-        const prepareSources = async () => {
-          const guide = turn.marks.length > 0 ? await renderGuide(source.image.blob, turn.marks) : null
-          if (guide) {
-            const guideUrl = URL.createObjectURL(guide.blob)
+        const prepare = async () => {
+          const request = await requestFor(framing?.frame ?? null)
+          // The bubble shows the arrows on the user's own picture, not on a frame
+          const shown = framing?.frame ? await renderGuide(source.image.blob, turn.marks) : request.guide
+          if (shown) {
+            const guideUrl = URL.createObjectURL(shown.blob)
             patchSession(sessionId, (s) => ({
               ...s,
               turns: s.turns.map((t) => (t.id === turn.id ? { ...t, guideUrl } : t)),
             }))
           }
-          const sources = [
-            await imageToReference(source.image),
-            ...(guide ? [{ base64: guide.base64, mimeType: guide.mimeType }] : []),
-            ...extras.map(({ base64, mimeType }) => ({ base64, mimeType })),
-          ]
           if (cancelledRef.current) throw new StoppedBeforeStart()
           setPreparing(false)
-          return sources
+          return request
         }
+        const request = await prepare()
         const finished = await run.start(
           keys,
-          runSettings,
-          await prepareSources(),
+          request.settings,
+          request.references,
           (image, part) => {
             const extra = localJob?.extras.get(part.base64)
             const wholeBlob = extra ? base64ToBlob(extra.raw.base64, extra.raw.mimeType) : null
@@ -238,6 +261,9 @@ export function useEditStudio({ settings, references, onResult }: Options) {
             const tagged: GeneratedImage = {
               ...image,
               edit: { sessionId, version: number, prompt: summarizeEdit(turn.prompt, turn.marks) },
+              // held as a lossless PNG so further edits don't wear it down;
+              // downloaded in the format the user asked for
+              ...(extra && settings.format !== image.format ? { saveAs: settings.format } : {}),
             }
             const version: EditVersion = {
               id: crypto.randomUUID(),
@@ -269,8 +295,8 @@ export function useEditStudio({ settings, references, onResult }: Options) {
             }))
           },
           {
-            singleSourcePrompt,
-            wrapCaller: localJob ? (caller) => makeLocalEditCaller(caller, localJob) : undefined,
+            singleSourcePrompt: request.singleSourcePrompt,
+            wrapCaller: localJob ? (caller) => makeLocalEditCaller(caller, localJob, framing) : undefined,
           },
         )
 
@@ -468,12 +494,22 @@ class StoppedBeforeStart extends Error {
 // resolution (or the pasted area looks softer than the rest) — asked for in
 // each provider's terms. The composite is always a lossless PNG: a JPEG
 // would re-encode every pixel the edit was meant to leave alone.
-function localSettings(image: GeneratedImage): Partial<Settings> {
-  const long = Math.max(image.width, image.height)
+function localSettings(image: { width: number; height: number }): Partial<Settings> {
+  // By area, not by the longer side: a long thin picture is no bigger
+  const megapixels = (image.width * image.height) / 1e6
   return {
-    imageSize: long > 2600 ? '4K' : long > 1400 ? '2K' : '1K',
-    xaiResolution: long > 1400 ? '2k' : '1k',
+    imageSize: megapixels > 5.5 ? '4K' : megapixels > 1.6 ? '2K' : '1K',
+    xaiResolution: megapixels > 1.6 ? '2k' : '1k',
     matchSize: { width: image.width, height: image.height },
     format: 'png',
   }
+}
+
+// How many reference photos can travel with an edit: what the model takes,
+// less the picture being edited and (with arrows) the arrow guide
+export function studioReferenceSlots(modelId: string, withArrows: boolean): number {
+  const model = getModel(modelId)
+  const most =
+    model.provider === 'xai' ? MAX_XAI_SOURCES : model.provider === 'openai' ? MAX_OPENAI_SOURCES : model.maxReferences
+  return Math.max(0, most - 1 - (withArrows ? 1 : 0))
 }

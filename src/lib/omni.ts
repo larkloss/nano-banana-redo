@@ -1,4 +1,5 @@
 import type { GenerateCaller } from './gemini'
+import { withOmniTags } from './mentions'
 
 // Gemini Omni video generation goes through the Interactions API — a different
 // surface from generateContent (images) and from Veo's long-running operations.
@@ -35,7 +36,8 @@ export const callGenerateOmni: GenerateCaller = async ({ apiKey, settings, refer
   const delivery = INLINE_RESOLUTIONS.has(settings.omniResolution) ? 'inline' : 'uri'
   const parts: InputPart[] = [
     ...references.map((r) => ({ type: 'image' as const, data: r.base64, mime_type: r.mimeType })),
-    { type: 'text' as const, text: settings.prompt },
+    // "@1" is Omni's <IMAGE_REF_0>
+    { type: 'text' as const, text: withOmniTags(settings.prompt, references.length) },
   ]
 
   const body: Record<string, unknown> = {

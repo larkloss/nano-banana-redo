@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import type { ReferenceImage } from '../../types'
 import type { PromptWorkspaceApi } from '../../hooks/usePromptWorkspace'
 import { ReferenceImageStrip } from './ReferenceImageStrip'
@@ -6,6 +6,8 @@ import { ModularPromptEditor } from './ModularPromptEditor'
 import { ExpandableTextarea } from '../common/ExpandableTextarea'
 import { fileToReference } from '../../lib/imageUtils'
 import { saveTextAsMarkdown, promptFilename } from '../../lib/saveText'
+import { MentionContext } from '../common/mentionContext'
+import { danglingMentions } from '../../lib/mentions'
 
 interface Props {
   prompt: string
@@ -34,6 +36,20 @@ export function PromptPanel({
 }: Props) {
   const [dragOver, setDragOver] = useState(false)
   const mode = workspaceApi.workspace.mode
+  // What "@1", "@2", … in the prompt can point at: the photos that are
+  // actually sent, numbered in the order shown
+  const sent = Math.min(references.length, maxReferences)
+  const mentionTargets = useMemo(
+    () =>
+      references.slice(0, sent).map((r, i) => ({
+        number: i + 1,
+        name: r.name,
+        objectUrl: r.objectUrl,
+      })),
+    [references, sent],
+  )
+  const written = singleBox || mode === 'simple' ? prompt : workspaceApi.assembled
+  const dangling = danglingMentions(written, sent)
 
   const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault()
@@ -112,34 +128,50 @@ export function PromptPanel({
         )}
       </div>
 
-      {singleBox || mode === 'simple' ? (
-        <ExpandableTextarea
-          value={prompt}
-          onChange={onPromptChange}
-          label="Prompt"
-          disabled={disabled}
-          placeholder={
-            singleBox
-              ? 'Describe the shot — subject, camera move, lighting, audio. Negatives go here too ("no dialogue", "single unbroken shot").'
-              : 'Describe the Abigail Chase artwork you want… (your fixed prompt goes here)'
-          }
-          rows={singleBox ? 10 : 8}
-          className="w-full resize-y rounded-md bg-transparent text-sm leading-relaxed text-zinc-200 placeholder-zinc-600 outline-none disabled:opacity-60"
-        />
-      ) : (
-        <ModularPromptEditor api={workspaceApi} simplePrompt={prompt} disabled={disabled} />
-      )}
+      <MentionContext.Provider value={mentionTargets}>
+        {singleBox || mode === 'simple' ? (
+          <ExpandableTextarea
+            value={prompt}
+            onChange={onPromptChange}
+            label="Prompt"
+            disabled={disabled}
+            placeholder={
+              singleBox
+                ? 'Describe the shot — subject, camera move, lighting, audio. Negatives go here too ("no dialogue", "single unbroken shot").'
+                : 'Describe the Abigail Chase artwork you want… (your fixed prompt goes here)'
+            }
+            rows={singleBox ? 10 : 8}
+            className="w-full resize-y rounded-md bg-transparent text-sm leading-relaxed text-zinc-200 placeholder-zinc-600 outline-none disabled:opacity-60"
+          />
+        ) : (
+          <ModularPromptEditor api={workspaceApi} simplePrompt={prompt} disabled={disabled} />
+        )}
+      </MentionContext.Provider>
 
       <div className="mt-3 border-t border-zinc-800 pt-3">
         <div className="mb-2 text-xs font-medium text-zinc-300">
-          📎 Reference photos <span className="font-normal text-zinc-500">· optional — drag them in or click +</span>
+          📎 Reference photos{' '}
+          <span className="font-normal text-zinc-500">
+            · optional — drag them in or click +
+            {references.length > 0 && ' · type @ in the prompt to point at one (“the dress from @2”)'}
+          </span>
         </div>
         <ReferenceImageStrip
           references={references}
           onChange={onReferencesChange}
           disabled={disabled}
           max={maxReferences}
+          numbered
         />
+        {dangling.length > 0 && (
+          <p className="mt-2 text-[11px] text-amber-400">
+            The prompt mentions {dangling.map((n) => `@${n}`).join(', ')}, but{' '}
+            {sent === 0
+              ? 'there are no reference photos'
+              : `only ${sent} reference photo${sent === 1 ? ' is' : 's are'} sent`}{' '}
+            — {dangling.length === 1 ? 'it' : 'they'} will go to the model as plain text.
+          </p>
+        )}
         {referenceNote && <p className="mt-2 text-[10px] text-amber-400/90">{referenceNote}</p>}
       </div>
     </div>

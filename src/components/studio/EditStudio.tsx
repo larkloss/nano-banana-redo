@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import type { RunState, Settings } from '../../types'
+import { studioReferenceSlots } from '../../hooks/useEditStudio'
 import type { EditRequest, EditSession, EditTurn, EditVersion } from '../../hooks/useEditStudio'
 import { MODELS, PROVIDER_LABELS, PROVIDER_ORDER, getModel } from '../../lib/models'
-import { downloadBlob, makeFilename } from '../../lib/imageUtils'
+import { downloadImage, saveFormat, sourceLabel } from '../../lib/imageUtils'
 import { friendlyReason } from '../../lib/friendly'
 import { MAX_MARKS, markColor, summarizeEdit, type EditMark } from '../../lib/annotate'
+import { mentionedNumbers } from '../../lib/mentions'
 import { MarkedImage } from './MarkedImage'
 import { MarkList } from './MarkList'
 
@@ -77,6 +79,13 @@ export function EditStudio({
     onPointerUp: () => setPeek(null),
     onPointerLeave: () => setPeek(null),
   })
+  // "@2" in an instruction points at reference photo 2 — which only travels
+  // with the edit when "+ reference photos" is ticked
+  const mentioned = mentionedNumbers([prompt, ...marks.map((m) => m.text)].join('\n'))
+  const sendingReferences = withReferences && referenceCount > 0
+  // (not all of them fit beside the picture and the arrow guide on every model)
+  const referencesSent = Math.min(referenceCount, studioReferenceSlots(modelId, marks.length > 0))
+  const unsentMentions = mentioned.filter((n) => !sendingReferences || n > referencesSent)
   const wholeAlreadyTaken = session.versions.some((v) => v.derivedFrom === selected.id)
   const busyHere = isRunning && runningTurn?.sessionId === session.id
   const busyElsewhere = isRunning && !busyHere
@@ -273,13 +282,14 @@ export function EditStudio({
               )}
               <button
                 type="button"
-                onClick={() => downloadBlob(selected.image.blob, makeFilename(selected.image, 0))}
+                onClick={() => void downloadImage(selected.image, 0)}
+                title={`Download ${saveFormat(selected.image)}`}
                 className="rounded-xl border border-zinc-700 px-3 py-1.5 text-xs text-zinc-300 hover:bg-zinc-800"
               >
                 ↓ Download {versionLabel(selected)}
               </button>
               <span className="ml-auto text-[11px] text-zinc-500">
-                {selected.image.width}×{selected.image.height} · {getModel(selected.image.modelId).label}
+                {selected.image.width}×{selected.image.height} · {sourceLabel(selected.image)}
               </span>
             </div>
             <div className="flex gap-2 overflow-x-auto pb-1">
@@ -427,7 +437,7 @@ export function EditStudio({
                     className={`flex items-center gap-1.5 text-[11px] ${referenceCount > 0 ? 'text-zinc-400' : 'text-zinc-600'}`}
                     title={
                       referenceCount > 0
-                        ? 'Also send your reference photos so the face stays consistent'
+                        ? 'Also send your reference photos so the face stays consistent — point at one with @1, @2, … in an instruction'
                         : 'No reference photos added on the main page'
                     }
                   >
@@ -438,7 +448,12 @@ export function EditStudio({
                       onChange={(e) => setWithReferences(e.target.checked)}
                       className="accent-blue-500"
                     />
-                    + reference photos{referenceCount > 0 ? ` (${referenceCount})` : ''}
+                    + reference photos
+                    {referenceCount === 0
+                      ? ''
+                      : referencesSent < referenceCount
+                        ? ` (${referencesSent} of ${referenceCount})`
+                        : ` (${referenceCount})`}
                   </label>
                   {busyHere ? (
                     <button
@@ -464,6 +479,20 @@ export function EditStudio({
                 <p className="mt-1.5 text-[11px] text-amber-400">
                   Only changes around the arrows are kept — turn off “only around arrows” to apply this to the whole
                   picture.
+                </p>
+              )}
+              {unsentMentions.length > 0 && (
+                <p className="mt-1.5 text-[11px] text-amber-400">
+                  {unsentMentions.map((n) => `@${n}`).join(', ')}{' '}
+                  {referenceCount === 0
+                    ? 'points at a reference photo, but none are added on the main page.'
+                    : !sendingReferences
+                      ? 'points at a reference photo — tick “+ reference photos” to send them along.'
+                      : referencesSent < referenceCount
+                        ? `won’t be sent — ${getModel(modelId).label} takes only ${
+                            referencesSent === 0 ? 'no reference photos' : `the first ${referencesSent}`
+                          } alongside the picture${marks.length > 0 ? ' and its arrows' : ''}.`
+                        : `points at no photo — there ${referenceCount === 1 ? 'is only 1' : `are only ${referenceCount}`}.`}
                 </p>
               )}
               <p className="mt-1.5 text-[10px] text-zinc-600">

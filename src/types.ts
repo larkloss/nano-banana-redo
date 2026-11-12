@@ -48,6 +48,9 @@ export interface Settings {
   // Edits that only keep part of the answer need it in the source's exact
   // shape and close to its size; providers that take an explicit size use it
   matchSize?: { width: number; height: number }
+  // The prompt already says which attached image is which (the edit studio
+  // writes its own): providers must not number the images again
+  imagesExplained?: boolean
 }
 
 export interface PromptVariant {
@@ -100,6 +103,12 @@ export interface GeneratedImage {
   createdAt: number
   // Set on results of the edit studio: which edit chain and version they are
   edit?: { sessionId: string; version: number; prompt: string }
+  // A picture the user brought in themselves (to edit), not a model's
+  uploaded?: { name: string }
+  // The format to download it in, when that isn't the one it is held in: an
+  // "only around the arrows" result is kept as a lossless PNG while it is
+  // being worked on, and saved in the format the user chose
+  saveAs?: OutputFormat
 }
 
 export type RunStatus =

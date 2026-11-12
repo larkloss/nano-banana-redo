@@ -1,6 +1,7 @@
 import type { OpenaiQuality, OpenaiSizeTier, ParsedImagePart, ParsedResponse, Settings } from '../types'
 import type { GenerateCaller } from './gemini'
 import { base64ToBlob } from './imageUtils'
+import { withNumberedReferences } from './mentions'
 
 // OpenAI GPT Image models. Text-to-image is a JSON POST; anything with
 // reference images goes through the edits endpoint as multipart/form-data
@@ -65,6 +66,8 @@ export function openaiSizeMatching(width: number, height: number): string {
   for (let tries = 0; tries < 400 && h >= 16; tries++) {
     const w = Math.round((h * ratio) / 16) * 16
     const pixels = w * h
+    // (rounding to the grid must not tip the shape past 1:3 or 3:1)
+    if (w * 3 < h || w > h * 3) return `${w * 3 < h ? w + 16 : w - 16}x${h}`
     if (w > MAX_EDGE || h > MAX_EDGE || pixels > MAX_PIXELS) h -= 16
     else if (pixels < MIN_PIXELS) h += 16
     else return `${w}x${h}`
@@ -92,7 +95,10 @@ export const callGenerateOpenai: GenerateCaller = async ({ apiKey, settings, ref
   const outputFormat = settings.format === 'jpg' ? 'jpeg' : 'png'
   const common: Record<string, string | number> = {
     model: modelId,
-    prompt: settings.prompt,
+    // "@2" points at the second attached image
+    prompt: settings.imagesExplained
+      ? settings.prompt
+      : withNumberedReferences(settings.prompt, Math.min(references.length, MAX_OPENAI_SOURCES)),
     n: 1,
     size: settings.matchSize
       ? openaiSizeMatching(settings.matchSize.width, settings.matchSize.height)
