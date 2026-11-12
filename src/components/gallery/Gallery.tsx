@@ -27,13 +27,13 @@ export function Gallery({ images, onClear, onEdit, onUpload, pasteEnabled, isRun
   // Pictures that arrive while earlier ones are still being opened wait
   // their turn rather than being dropped
   const busy = useRef(false)
-  const waiting = useRef<File[]>([])
+  const waiting = useRef<File[][]>([])
   const upload = useCallback(
     (list: FileList | File[] | null | undefined) => {
       const files = Array.from(list ?? [])
       if (files.length === 0) return
       if (busy.current) {
-        waiting.current.push(...files)
+        waiting.current.push(files)
         return
       }
       busy.current = true
@@ -44,7 +44,7 @@ export function Gallery({ images, onClear, onEdit, onUpload, pasteEnabled, isRun
       void (async () => {
         const notes: string[] = []
         try {
-          for (let batch = files; batch.length > 0; batch = waiting.current.splice(0)) {
+          for (let batch: File[] | undefined = files; batch; batch = waiting.current.shift()) {
             notes.push(...(await onUpload(batch)))
           }
         } finally {

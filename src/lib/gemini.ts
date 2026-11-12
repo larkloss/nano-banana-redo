@@ -33,11 +33,12 @@ const capitalise = (text: string) => text[0].toUpperCase() + text.slice(1)
 export const callGenerate: GenerateCaller = async ({ apiKey, settings, references }, signal) => {
   const ai = getClient(apiKey)
   const model = getModel(settings.modelId)
-  const systemInstruction = settings.systemInstruction.trim()
-
-  // "@2" in the prompt points at the second reference: caption each picture
-  // so the model knows which is which
-  const mentions = captionedReferences(settings.prompt, references.length)
+  // "@2" in the prompt (or the system instruction) points at the second
+  // reference: caption each picture so the model knows which is which
+  const mentions = settings.imagesExplained
+    ? { captions: false, prompt: settings.prompt, systemInstruction: settings.systemInstruction }
+    : captionedReferences(settings.prompt, settings.systemInstruction, references.length)
+  const systemInstruction = mentions.systemInstruction.trim()
   const parts: Part[] = [
     ...references.flatMap((r, i): Part[] => [
       ...(mentions.captions ? [{ text: `${capitalise(referenceName(i + 1))}:` }] : []),

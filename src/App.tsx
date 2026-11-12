@@ -106,6 +106,12 @@ function App() {
               'aspect ratio unless you pick a specific ratio above.'
             : 'Grok will edit from this image. On "Auto" the output keeps the source ratio — pick a specific ratio to override it.'
 
+  const maxReferences =
+    provider === 'xai'
+      ? MAX_XAI_SOURCES
+      : provider === 'openai'
+        ? MAX_OPENAI_SOURCES
+        : getModel(settings.modelId).maxReferences
   const mock = isMockMode()
   const activeKeys = mock
     ? apiKeys.filter(Boolean).length > 0
@@ -188,13 +194,7 @@ function App() {
           references={references}
           onReferencesChange={setReferences}
           referenceNote={referenceNote}
-          maxReferences={
-            provider === 'xai'
-              ? MAX_XAI_SOURCES
-              : provider === 'openai'
-                ? MAX_OPENAI_SOURCES
-                : getModel(settings.modelId).maxReferences
-          }
+          maxReferences={maxReferences}
           singleBox={isVideoModel}
           disabled={isRunning}
         />
@@ -205,7 +205,8 @@ function App() {
           runDisabledHint={runDisabledHint}
           noun={noun}
           runLabel={runLabel}
-          onRun={() => void start(activeKeys, { ...settings, prompt: effectivePrompt }, references)}
+          // (only as many reference photos as the model takes — the ones numbered in the strip)
+          onRun={() => void start(activeKeys, { ...settings, prompt: effectivePrompt }, references.slice(0, maxReferences))}
           onStop={stop}
         />
         <Gallery

@@ -11,13 +11,15 @@
 // In all three the "@2" itself becomes the name the request uses. A prompt
 // with no mention is sent exactly as before.
 
-// Not part of an address or a handle ("a@1", "@@1"), and a whole number
-const MENTION = /(^|[^\w@.])@([1-9]\d?)(?![\w])/g
+// One or more mentions in a row ("@1", "@1@2" — also with the full-width ＠
+// a Chinese keyboard types), not part of an address or a handle ("a@1.com")
+const MENTIONS = /(^|[^\w@＠.])((?:[@＠][1-9]\d?)+)(?!\w)/g
+const numbersIn = (run: string) => run.split(/[@＠]/).filter(Boolean).map(Number)
 
 // Reference numbers a text mentions, lowest first
 export function mentionedNumbers(text: string): number[] {
   const found = new Set<number>()
-  for (const match of text.matchAll(MENTION)) found.add(Number(match[2]))
+  for (const match of text.matchAll(MENTIONS)) for (const n of numbersIn(match[2])) found.add(n)
   return [...found].sort((a, b) => a - b)
 }
 
@@ -26,11 +28,12 @@ export function danglingMentions(text: string, count: number): number[] {
   return mentionedNumbers(text).filter((n) => n > count)
 }
 
-// Rewrites every mention of an existing picture with `name(n)`
+// Rewrites every mention of an existing picture with `name(n)`; a mention of
+// one that isn't there stays as written
 export function nameMentions(text: string, count: number, name: (n: number) => string): string {
-  return text.replace(MENTION, (whole, before: string, digits: string) => {
-    const n = Number(digits)
-    return n <= count ? `${before}${name(n)}` : whole
+  return text.replace(MENTIONS, (_whole, before: string, run: string) => {
+    const names = numbersIn(run).map((n) => (n <= count ? name(n) : `@${n}`))
+    return before + names.join(' and ')
   })
 }
 
@@ -51,10 +54,19 @@ export function withNumberedReferences(prompt: string, count: number): string {
   )
 }
 
-// For Gemini: whether to caption the pictures, and the prompt to go with them
-export function captionedReferences(prompt: string, count: number): { captions: boolean; prompt: string } {
-  if (mentionedNumbers(prompt).every((n) => n > count)) return { captions: false, prompt }
-  return { captions: true, prompt: nameMentions(prompt, count, referenceName) }
+// For Gemini: whether to caption the pictures, and the texts to go with them
+export function captionedReferences(
+  prompt: string,
+  systemInstruction: string,
+  count: number,
+): { captions: boolean; prompt: string; systemInstruction: string } {
+  const pointed = [...mentionedNumbers(prompt), ...mentionedNumbers(systemInstruction)].some((n) => n <= count)
+  if (!pointed) return { captions: false, prompt, systemInstruction }
+  return {
+    captions: true,
+    prompt: nameMentions(prompt, count, referenceName),
+    systemInstruction: nameMentions(systemInstruction, count, referenceName),
+  }
 }
 
 // For Gemini Omni: its own reference tags (which count from 0)

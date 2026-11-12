@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { RunState, Settings } from '../../types'
+import { studioReferenceSlots } from '../../hooks/useEditStudio'
 import type { EditRequest, EditSession, EditTurn, EditVersion } from '../../hooks/useEditStudio'
 import { MODELS, PROVIDER_LABELS, PROVIDER_ORDER, getModel } from '../../lib/models'
 import { downloadBlob, makeFilename, sourceLabel } from '../../lib/imageUtils'
@@ -82,7 +83,9 @@ export function EditStudio({
   // with the edit when "+ reference photos" is ticked
   const mentioned = mentionedNumbers([prompt, ...marks.map((m) => m.text)].join('\n'))
   const sendingReferences = withReferences && referenceCount > 0
-  const unsentMentions = mentioned.filter((n) => !sendingReferences || n > referenceCount)
+  // (not all of them fit beside the picture and the arrow guide on every model)
+  const referencesSent = Math.min(referenceCount, studioReferenceSlots(modelId, marks.length > 0))
+  const unsentMentions = mentioned.filter((n) => !sendingReferences || n > referencesSent)
   const wholeAlreadyTaken = session.versions.some((v) => v.derivedFrom === selected.id)
   const busyHere = isRunning && runningTurn?.sessionId === session.id
   const busyElsewhere = isRunning && !busyHere
@@ -444,7 +447,12 @@ export function EditStudio({
                       onChange={(e) => setWithReferences(e.target.checked)}
                       className="accent-blue-500"
                     />
-                    + reference photos{referenceCount > 0 ? ` (${referenceCount})` : ''}
+                    + reference photos
+                    {referenceCount === 0
+                      ? ''
+                      : referencesSent < referenceCount
+                        ? ` (${referencesSent} of ${referenceCount})`
+                        : ` (${referenceCount})`}
                   </label>
                   {busyHere ? (
                     <button
@@ -479,7 +487,11 @@ export function EditStudio({
                     ? 'points at a reference photo, but none are added on the main page.'
                     : !sendingReferences
                       ? 'points at a reference photo — tick “+ reference photos” to send them along.'
-                      : `points at no photo — there ${referenceCount === 1 ? 'is only 1' : `are only ${referenceCount}`}.`}
+                      : referencesSent < referenceCount
+                        ? `won’t be sent — ${getModel(modelId).label} takes only ${
+                            referencesSent === 0 ? 'no reference photos' : `the first ${referencesSent}`
+                          } alongside the picture${marks.length > 0 ? ' and its arrows' : ''}.`
+                        : `points at no photo — there ${referenceCount === 1 ? 'is only 1' : `are only ${referenceCount}`}.`}
                 </p>
               )}
               <p className="mt-1.5 text-[10px] text-zinc-600">

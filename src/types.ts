@@ -48,6 +48,9 @@ export interface Settings {
   // Edits that only keep part of the answer need it in the source's exact
   // shape and close to its size; providers that take an explicit size use it
   matchSize?: { width: number; height: number }
+  // The prompt already says which attached image is which (the edit studio
+  // writes its own): providers must not number the images again
+  imagesExplained?: boolean
 }
 
 export interface PromptVariant {

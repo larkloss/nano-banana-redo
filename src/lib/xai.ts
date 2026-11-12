@@ -68,7 +68,9 @@ export const callGenerateXai: GenerateCaller = async ({ apiKey, settings, refere
   const base = {
     model: modelId,
     // "@2" points at the second source image
-    prompt: withNumberedReferences(settings.prompt, Math.min(references.length, MAX_XAI_SOURCES)),
+    prompt: settings.imagesExplained
+      ? settings.prompt
+      : withNumberedReferences(settings.prompt, Math.min(references.length, MAX_XAI_SOURCES)),
     response_format: 'b64_json',
     resolution: settings.xaiResolution,
     ...(supportsXaiQuality(modelId) ? { quality: settings.xaiQuality } : {}),
@@ -99,7 +101,9 @@ export const callGenerateXai: GenerateCaller = async ({ apiKey, settings, refere
     if (!isRejectedRequestShape(err)) throw err
     // Only the first image goes now, so a prompt written about the others
     // (an arrow guide) is swapped for one that stands on its own
-    return post(EDIT_ENDPOINT, { ...singleBody, prompt: singleSourcePrompt ?? base.prompt }, apiKey, signal)
+    const alone =
+      singleSourcePrompt ?? (settings.imagesExplained ? settings.prompt : withNumberedReferences(settings.prompt, 1))
+    return post(EDIT_ENDPOINT, { ...singleBody, prompt: alone }, apiKey, signal)
   }
 }
 

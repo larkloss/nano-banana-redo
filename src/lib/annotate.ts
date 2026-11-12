@@ -195,9 +195,12 @@ export function buildEditPrompt(text: string, marks: EditMark[], referenceCount:
 
   const lines = marks.map((mark, i) => `${i + 1} — ${describeMark(mark, i)}: ${named(mark.text)}`)
   const refNote =
-    referenceCount > 0
-      ? `\nThe images after the second are reference photos of the same character.${numbering}${use}${pointed ? '' : '.'}`
-      : ''
+    referenceCount === 0
+      ? ''
+      : pointed
+        ? `\nThe images after the second are reference photos of the same character.${numbering}${use}`
+        : `\nThe images after the second are reference photos of the same character — use them only to keep the ` +
+          "character's face and likeness consistent."
   return [
     'Edit the first image.',
     'The second image is the same picture with numbered, coloured arrows. Each arrow points at the exact thing ' +
