@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { RunState, Settings } from '../../types'
 import type { EditRequest, EditSession, EditTurn, EditVersion } from '../../hooks/useEditStudio'
 import { MODELS, PROVIDER_LABELS, PROVIDER_ORDER, getModel } from '../../lib/models'
-import { downloadBlob, makeFilename } from '../../lib/imageUtils'
+import { downloadBlob, makeFilename, sourceLabel } from '../../lib/imageUtils'
 import { friendlyReason } from '../../lib/friendly'
 import { MAX_MARKS, markColor, summarizeEdit, type EditMark } from '../../lib/annotate'
 import { MarkedImage } from './MarkedImage'
@@ -279,7 +279,7 @@ export function EditStudio({
                 ↓ Download {versionLabel(selected)}
               </button>
               <span className="ml-auto text-[11px] text-zinc-500">
-                {selected.image.width}×{selected.image.height} · {getModel(selected.image.modelId).label}
+                {selected.image.width}×{selected.image.height} · {sourceLabel(selected.image)}
               </span>
             </div>
             <div className="flex gap-2 overflow-x-auto pb-1">

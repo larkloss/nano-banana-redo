@@ -16,6 +16,11 @@ import { isMockMode } from './lib/mockGemini'
 import { getModel } from './lib/models'
 import { MAX_XAI_SOURCES } from './lib/xai'
 import { MAX_OPENAI_SOURCES } from './lib/openai'
+import { uploadToImage } from './lib/imageUtils'
+import type { GeneratedImage } from './types'
+
+// More than this in one go is almost certainly a wrong folder
+const MAX_UPLOADS = 12
 
 function App() {
   const { settings, update, replaceSettings, provider, apiKeys, setApiKey } = useSettings()
@@ -34,6 +39,32 @@ function App() {
   const { runState, images, start, stop, addImage, clearImages, isRunning } = useGenerationEngine()
   const [references, setReferences] = usePersistedReferences('generator')
   const studio = useEditStudio({ settings, references, onResult: addImage })
+  // The user's own pictures: into the gallery like any other, and the first
+  // one straight into the edit studio
+  const { open: openStudio } = studio
+  const uploadPictures = useCallback(
+    async (files: File[]) => {
+      const notes: string[] = []
+      if (files.length > MAX_UPLOADS) notes.push(`Only the first ${MAX_UPLOADS} pictures were added.`)
+      let first: GeneratedImage | null = null
+      for (const file of files.slice(0, MAX_UPLOADS)) {
+        try {
+          const { image, note } = await uploadToImage(file)
+          addImage(image)
+          first ??= image
+          if (note) notes.push(note)
+        } catch {
+          notes.push(
+            `${file.name || 'That file'} couldn’t be opened — this browser can’t read it as a picture. ` +
+              'Try saving it as a JPG or PNG first.',
+          )
+        }
+      }
+      if (first) openStudio(first)
+      return notes
+    },
+    [addImage, openStudio],
+  )
   const [theme, setTheme] = useState<Theme>(loadTheme)
   const toggleTheme = () => {
     const next = theme === 'light' ? 'dark' : 'light'
@@ -157,7 +188,14 @@ function App() {
           onRun={() => void start(activeKeys, { ...settings, prompt: effectivePrompt }, references)}
           onStop={stop}
         />
-        <Gallery images={images} onClear={clearImages} onEdit={studio.open} isRunning={isRunning} />
+        <Gallery
+          images={images}
+          onClear={clearImages}
+          onEdit={studio.open}
+          onUpload={uploadPictures}
+          pasteEnabled={!studio.openSession}
+          isRunning={isRunning}
+        />
       </main>
       {studio.openSession && (
         <EditStudio

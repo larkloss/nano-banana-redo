@@ -100,6 +100,8 @@ export interface GeneratedImage {
   createdAt: number
   // Set on results of the edit studio: which edit chain and version they are
   edit?: { sessionId: string; version: number; prompt: string }
+  // A picture the user brought in themselves (to edit), not a model's
+  uploaded?: { name: string }
 }
 
 export type RunStatus =

@@ -1,6 +1,6 @@
 import type { GeneratedImage } from '../../types'
 import { getModel } from '../../lib/models'
-import { downloadBlob, makeFilename } from '../../lib/imageUtils'
+import { downloadBlob, makeFilename, sourceLabel } from '../../lib/imageUtils'
 
 interface Props {
   image: GeneratedImage
@@ -30,11 +30,19 @@ export function ImageCard({ image, index, onOpen, onEdit }: Props) {
           <button type="button" onClick={onOpen} className="block w-full cursor-zoom-in overflow-hidden">
             <img
               src={image.objectUrl}
-              alt={`Generated ${index + 1}`}
+              alt={image.uploaded ? `Uploaded ${index + 1}` : `Generated ${index + 1}`}
               loading="lazy"
               className="aspect-square w-full object-cover transition-transform duration-300 group-hover:scale-[1.03]"
             />
           </button>
+        )}
+        {image.uploaded && (
+          <span
+            className="absolute left-2 top-2 rounded-full bg-black/60 px-2 py-0.5 text-[10px] font-medium text-white"
+            title={image.uploaded.name}
+          >
+            ⬆ Uploaded
+          </span>
         )}
         {image.edit && (
           <span
@@ -48,16 +56,20 @@ export function ImageCard({ image, index, onOpen, onEdit }: Props) {
       <div className="flex items-center gap-1.5 px-3 py-2">
         <span
           className="min-w-0 flex-1 truncate text-[11px] text-zinc-500"
-          title={`${image.width}×${image.height} · ${getModel(image.modelId).label} · attempt ${image.attempt} · ${time}`}
+          title={
+            image.uploaded
+              ? `${image.uploaded.name} · ${image.width}×${image.height} · ${time}`
+              : `${image.width}×${image.height} · ${getModel(image.modelId).label} · attempt ${image.attempt} · ${time}`
+          }
         >
-          {getModel(image.modelId).label} · {time}
+          {sourceLabel(image)} · {time}
         </span>
         {onEdit && (
           <button
             type="button"
             onClick={onEdit}
             className="shrink-0 rounded-full bg-blue-500/15 px-2.5 py-1 text-[11px] font-medium text-blue-300 hover:bg-blue-500/25"
-            title="Keep editing this picture with new instructions"
+            title={image.uploaded ? 'Edit this picture' : 'Keep editing this picture with new instructions'}
           >
             ✏️ Edit
           </button>

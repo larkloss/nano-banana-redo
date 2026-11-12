@@ -120,6 +120,95 @@ function probeVideo(url: string): Promise<{ width: number; height: number; durat
   })
 }
 
+// The largest side an uploaded picture keeps. The models answer at 4K at
+// most, and a patch pasted into something bigger would look soft.
+const MAX_UPLOAD_SIDE = 4096
+
+// Brings one of the user's own pictures into the gallery so it can be
+// edited. PNGs and upright JPEGs are kept byte for byte; anything else (a
+// phone photo stored sideways, WebP, GIF, AVIF, an oversized picture) is
+// redrawn the way the browser shows it and kept as a lossless PNG, so the
+// providers and the "only around the arrows" compositor all see the same
+// pixels. Throws when the browser can't read the file as a picture.
+export async function uploadToImage(file: File): Promise<{ image: GeneratedImage; note: string | null }> {
+  const bitmap = await createImageBitmap(file)
+  try {
+    const actual = await sniffImageMimeType(file, file.type)
+    const long = Math.max(bitmap.width, bitmap.height)
+    const scale = Math.min(1, MAX_UPLOAD_SIDE / long)
+    const asIs =
+      scale === 1 && (actual === 'image/png' || (actual === 'image/jpeg' && (await jpegOrientation(file)) === 1))
+    let blob: Blob
+    let width = bitmap.width
+    let height = bitmap.height
+    if (asIs) {
+      blob = file.type === actual ? file : new Blob([file], { type: actual })
+    } else {
+      width = Math.max(1, Math.round(bitmap.width * scale))
+      height = Math.max(1, Math.round(bitmap.height * scale))
+      const canvas = new OffscreenCanvas(width, height)
+      const ctx = canvas.getContext('2d')!
+      ctx.imageSmoothingQuality = 'high'
+      ctx.drawImage(bitmap, 0, 0, width, height)
+      blob = await canvas.convertToBlob({ type: 'image/png' })
+    }
+    const image: GeneratedImage = {
+      id: crypto.randomUUID(),
+      kind: 'image',
+      blob,
+      objectUrl: URL.createObjectURL(blob),
+      width,
+      height,
+      mimeType: blob.type,
+      format: blob.type === 'image/jpeg' ? 'jpg' : 'png',
+      attempt: 0,
+      modelId: '',
+      createdAt: Date.now(),
+      uploaded: { name: file.name || 'Pasted picture' },
+    }
+    const note =
+      scale < 1
+        ? `${image.uploaded!.name} was ${bitmap.width}×${bitmap.height} — scaled down to ${width}×${height}, the largest the models work with.`
+        : null
+    return { image, note }
+  } finally {
+    bitmap.close()
+  }
+}
+
+// EXIF orientation of a JPEG (1 = stored upright, also when there is none)
+async function jpegOrientation(blob: Blob): Promise<number> {
+  const view = new DataView(await blob.slice(0, 256 * 1024).arrayBuffer())
+  if (view.byteLength < 4 || view.getUint16(0) !== 0xffd8) return 1
+  let offset = 2
+  while (offset + 4 <= view.byteLength) {
+    const marker = view.getUint16(offset)
+    if ((marker & 0xff00) !== 0xff00 || marker === 0xffda) break
+    const size = view.getUint16(offset + 2)
+    // APP1 segment starting with "Exif"
+    if (marker === 0xffe1 && offset + 18 <= view.byteLength && view.getUint32(offset + 4) === 0x45786966) {
+      const tiff = offset + 10
+      const little = view.getUint16(tiff) === 0x4949
+      const ifd = tiff + view.getUint32(tiff + 4, little)
+      if (ifd + 2 > view.byteLength) return 1
+      const count = view.getUint16(ifd, little)
+      for (let i = 0; i < count; i++) {
+        const entry = ifd + 2 + i * 12
+        if (entry + 12 > view.byteLength) return 1
+        if (view.getUint16(entry, little) === 0x0112) return view.getUint16(entry + 8, little)
+      }
+      return 1
+    }
+    offset += 2 + size
+  }
+  return 1
+}
+
+// Who made a picture, for labels: the model's name, or "Uploaded"
+export function sourceLabel(image: GeneratedImage): string {
+  return image.uploaded ? 'Uploaded' : getModel(image.modelId).label
+}
+
 export function makeFilename(image: GeneratedImage, index: number): string {
   if (image.kind === 'video') {
     const stamp = new Date(image.createdAt).toISOString().slice(0, 19).replace(/[:T]/g, '-')
@@ -129,7 +218,7 @@ export function makeFilename(image: GeneratedImage, index: number): string {
   }
   const ext = image.format === 'jpg' ? 'jpg' : 'png'
   const stamp = new Date(image.createdAt).toISOString().slice(0, 19).replace(/[:T]/g, '-')
-  const slug = getModel(image.modelId).filenameSlug
+  const slug = image.uploaded ? 'upload' : getModel(image.modelId).filenameSlug
   const edit = image.edit ? `-edit-v${image.edit.version}` : ''
   return `abigail-${slug}${edit}_${stamp}_${String(index + 1).padStart(2, '0')}.${ext}`
 }
