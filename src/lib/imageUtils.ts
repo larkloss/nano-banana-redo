@@ -1,6 +1,7 @@
 import JSZip from 'jszip'
 import type { GeneratedImage, OutputFormat, ParsedImagePart } from '../types'
 import { getModel } from './models'
+import { toFullColourJpeg } from './jpegExport'
 
 export function base64ToBlob(base64: string, mimeType: string): Blob {
   const binary = atob(base64)
@@ -151,13 +152,15 @@ export async function uploadToImage(file: File): Promise<{ image: GeneratedImage
     } else {
       width = Math.max(1, Math.round(bitmap.width * scale))
       height = Math.max(1, Math.round(bitmap.height * scale))
-      const canvas = new OffscreenCanvas(width, height)
-      const ctx = canvas.getContext('2d')!
-      ctx.imageSmoothingQuality = 'high'
-      ctx.drawImage(bitmap, 0, 0, width, height)
-      blob = await canvas.convertToBlob(
-        actual === 'image/jpeg' ? { type: 'image/jpeg', quality: 0.95 } : { type: 'image/png' },
-      )
+      if (actual === 'image/jpeg') {
+        blob = await toFullColourJpeg(file, SAVE_QUALITY, MAX_UPLOAD_SIDE)
+      } else {
+        const canvas = new OffscreenCanvas(width, height)
+        const ctx = canvas.getContext('2d')!
+        ctx.imageSmoothingQuality = 'high'
+        ctx.drawImage(bitmap, 0, 0, width, height)
+        blob = await canvas.convertToBlob({ type: 'image/png' })
+      }
     }
     const image: GeneratedImage = {
       id: crypto.randomUUID(),
@@ -274,8 +277,9 @@ export function downloadBlob(blob: Blob, filename: string): void {
 // The bytes a picture is saved as. Usually the ones it is held in; a
 // lossless working copy (see `saveAs`) is encoded once, on the way out — as
 // a high-quality JPEG it is a few MB instead of the 10–20 MB of a PNG that
-// holds nothing more.
-const SAVE_QUALITY = 0.95
+// holds nothing more. With colour at full resolution: the browser's own
+// encoder halves it, which shows as soft, bleeding colour along sharp edges.
+const SAVE_QUALITY = 95
 const encoded = new WeakMap<Blob, Promise<Blob>>()
 export function exportBlob(image: GeneratedImage): Promise<Blob> {
   if (image.kind !== 'image' || image.saveAs !== 'jpg' || image.mimeType === 'image/jpeg') {
@@ -283,13 +287,7 @@ export function exportBlob(image: GeneratedImage): Promise<Blob> {
   }
   let pending = encoded.get(image.blob)
   if (!pending) {
-    pending = createImageBitmap(image.blob).then(async (bitmap) => {
-      try {
-        return await toJpeg(bitmap, SAVE_QUALITY)
-      } finally {
-        bitmap.close()
-      }
-    })
+    pending = toFullColourJpeg(image.blob, SAVE_QUALITY)
     encoded.set(image.blob, pending)
     // a failed encode is not remembered
     pending.catch(() => encoded.delete(image.blob))
