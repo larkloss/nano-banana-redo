@@ -70,6 +70,7 @@ const WORK_MAX = 768 // long side for change detection
 const COARSE_MAX = 192 // long side for measuring the answer's zoom
 const CROP_MAX = 900 // long side for seam search per changed area
 const BLEND_MAX = 256 // long side for the boundary-correction field
+const SHARP_MAX = 12e6 // px of one area resampled the careful way (memory, time)
 const DETECT_BLUR = 1.0 // px at work size: averages away redrawn texture
 const SEAM_BLUR = 0.7
 const LOCAL_ALIGN = 3 // ± px at crop size
@@ -1292,9 +1293,19 @@ function blendArea(
   const base = octx.getImageData(x0, y0, cw, ch)
   const layerCanvas = new OffscreenCanvas(cw, ch)
   const lctx = layerCanvas.getContext('2d', { willReadFrequently: true })!
-  lctx.imageSmoothingQuality = 'high'
-  drawAnswer(lctx, answer, placeRect(offset, W, H, x0, y0, 1, 1))
-  const layer = lctx.getImageData(0, 0, cw, ch)
+  const rect = placeRect(offset, W, H, x0, y0, 1, 1)
+  // The answer never lands on whole pixels, and the browser's own
+  // interpolation would soften it noticeably against the untouched picture
+  // around it (edges and fine texture lose a quarter or more). A windowed-sinc
+  // resampling keeps them.
+  let layer = cw * ch <= SHARP_MAX ? sharpAnswer(answer, rect, cw, ch) : null
+  if (layer) {
+    lctx.putImageData(layer, 0, 0)
+  } else {
+    lctx.imageSmoothingQuality = 'high'
+    drawAnswer(lctx, answer, rect)
+    layer = lctx.getImageData(0, 0, cw, ch)
+  }
 
   // Local tone match + boundary correction, estimated on a small copy. The
   // crop's own frame can only be the picture's edge (the crop leaves room
@@ -1371,6 +1382,95 @@ function extendAnswer(result: ImageBitmap, W: number, H: number, marginFrame: nu
   ctx.drawImage(canvas, 0, e, bw + 2 * e, 1, 0, 0, bw + 2 * e, e)
   ctx.drawImage(canvas, 0, e + bh - 1, bw + 2 * e, 1, 0, e + bh, bw + 2 * e, e)
   return { canvas, e, bw, bh }
+}
+
+// The answer where its frame lands on `rect`, as a w×h picture, resampled
+// with a Lanczos-3 kernel (widened when the answer is larger than what it is
+// drawn into, so it is also the right low-pass). Separable: rows, then columns.
+function sharpAnswer(answer: Answer, rect: Rect, w: number, h: number): ImageData | null {
+  const ctx = answer.canvas.getContext('2d')
+  if (!ctx) return null
+  // output pixel i (centre i + 0.5) reads the answer canvas at a·(i + 0.5) + b
+  const ax = answer.bw / rect.dw
+  const ay = answer.bh / rect.dh
+  const bx = answer.e - rect.ox * ax
+  const by = answer.e - rect.oy * ay
+  const colTaps = lanczosTaps(w, ax, bx, answer.canvas.width)
+  const rowTaps = lanczosTaps(h, ay, by, answer.canvas.height)
+  const sx0 = colTaps.first
+  const sy0 = rowTaps.first
+  const sw = colTaps.last - sx0 + 1
+  const sh = rowTaps.last - sy0 + 1
+  if (sw <= 0 || sh <= 0) return null
+  const src = ctx.getImageData(sx0, sy0, sw, sh).data
+  const out = new ImageData(w, h)
+  const rows = new Float32Array(w * sh)
+  for (let c = 0; c < 3; c++) {
+    // horizontally: sw → w, for every source row
+    for (let y = 0; y < sh; y++) {
+      const line = y * sw * 4 + c
+      for (let x = 0; x < w; x++) {
+        let acc = 0
+        const t = x * colTaps.count
+        const start = colTaps.start[x] - sx0
+        for (let k = 0; k < colTaps.count; k++) acc += colTaps.weight[t + k] * src[line + (start + k) * 4]
+        rows[y * w + x] = acc
+      }
+    }
+    // vertically: sh → h
+    for (let y = 0; y < h; y++) {
+      const t = y * rowTaps.count
+      const start = rowTaps.start[y] - sy0
+      for (let x = 0; x < w; x++) {
+        let acc = 0
+        for (let k = 0; k < rowTaps.count; k++) acc += rowTaps.weight[t + k] * rows[(start + k) * w + x]
+        out.data[(y * w + x) * 4 + c] = acc < 0 ? 0 : acc > 255 ? 255 : acc + 0.5
+      }
+    }
+  }
+  for (let p = 3; p < out.data.length; p += 4) out.data[p] = 255
+  return out
+}
+
+// For each of `n` output pixels: the run of source pixels it reads (clamped
+// to the source, whose edge then simply repeats) and their weights
+function lanczosTaps(
+  n: number,
+  a: number,
+  b: number,
+  size: number,
+): { start: Int32Array; weight: Float32Array; count: number; first: number; last: number } {
+  const stretch = Math.max(1, a)
+  const radius = 3 * stretch
+  const count = Math.ceil(2 * radius) + 1
+  const start = new Int32Array(n)
+  const weight = new Float32Array(n * count)
+  let first = Infinity
+  let last = -Infinity
+  for (let i = 0; i < n; i++) {
+    const centre = a * (i + 0.5) + b
+    // the run is kept inside the source by sliding it, never by cutting it
+    const from = Math.min(Math.max(0, size - count), Math.max(0, Math.floor(centre - radius)))
+    start[i] = from
+    let sum = 0
+    for (let k = 0; k < count; k++) {
+      const x = (from + k + 0.5 - centre) / stretch
+      let v = 0
+      if (Math.abs(x) < 1e-6) v = 1
+      else if (Math.abs(x) < 3) {
+        const px = Math.PI * x
+        v = (3 * Math.sin(px) * Math.sin(px / 3)) / (px * px)
+      }
+      // a source pixel that doesn't exist (a source narrower than the kernel)
+      if (from + k >= size) v = 0
+      weight[i * count + k] = v
+      sum += v
+    }
+    if (sum !== 0) for (let k = 0; k < count; k++) weight[i * count + k] /= sum
+    first = Math.min(first, from)
+    last = Math.max(last, Math.min(size - 1, from + count - 1))
+  }
+  return { start, weight, count, first, last }
 }
 
 // Draws the answer so that its own frame lands on `rect`
