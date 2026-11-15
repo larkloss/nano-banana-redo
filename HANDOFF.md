@@ -13,8 +13,8 @@
 
 | 项目 | 状态 |
 |---|---|
-| 线上版本 | `main` = `299a7b5`，PR #1–#9 全部合并并已部署 |
-| 开发分支 | `claude/jolly-ride-8g2e2e`，与 `main` 一致，没有未合并的代码改动 |
+| 线上版本 | `origin/main` = `299a7b5`，PR #1–#9 全部合并并已部署 |
+| 开发分支 | `claude/jolly-ride-8g2e2e`，只比 `main` 多出本文档，没有未合并的代码改动 |
 | 进行中的工作 | 没有。最后一个问题（第 8.1 节）由项目主人决定暂不修改 |
 | 仓库内的自动化测试 | **没有**（`package.json` 无 test 脚本）。测试工具在仓库之外，见第 7 节 |
 
@@ -51,7 +51,7 @@ Worker 同时负责在设备间同步 prompt、设置和参考照片。
 
 - 只推 `claude/jolly-ride-8g2e2e`（或主人新指定的分支）。PR 合并后，从最新 `main` 重开同名分支：
   `git fetch origin main && git checkout -B claude/jolly-ride-8g2e2e origin/main`。
-- 提交信息、PR、代码注释里不写任何模型标识。
+- 提交信息正文、PR 正文、代码注释里不写是哪个模型做的。提交末尾的署名行由你所用的工具决定，照它的要求来。
 - 仓库没有 PR 模板。
 
 **硬性规则**
@@ -76,15 +76,26 @@ npm run build:singles  # 依次构建三个单文件并复制为 nano-banana*.ht
 - 每次 Vite 构建会清空 `dist/`，所以 `build:single*` 每步都立刻 `cp`；不要改成最后统一复制。
 - `site/`、`dist/`、`.wrangler`、`.dev.vars` 不入库。
 - 本地跑 Worker：`npx wrangler dev`，在 `.dev.vars` 里放 `APP_PASSWORD`（至少 8 位）。没有对应的 npm 脚本。
-- `worker/` 有自己的 `worker/tsconfig.json`，`tsc -b` 不检查它，只有 ESLint 覆盖。
-- **确认上线**：我工作的云端环境出不了网到 `workers.dev` 和 `api.cloudflare.com`，没法直接打开线上站点。
-  我是用 Cloudflare 的 MCP 工具查 Worker 的最近修改时间（`workers_list` / `workers_get_worker`），
-  必要时用 `workers_get_worker_code` 在线上代码里找新功能特有的字符串。合并后大约十分钟内完成部署。
+  它托管的是 `prepare-site.mjs` 复制的单文件，所以每次改 `src/` 后要先 `npm run build:singles` 再测。
+- **云同步只有在 Worker 后面才会启用**：`bootCloud` 要求 `/api/snapshot` 的回答带 `X-NBR-Cloud: 1` 头，
+  否则状态是 `off`。`npm run dev` 和 `file://` 下同步永远是关的。
+- `worker/` 有自己的 `worker/tsconfig.json`（`noEmit`），`tsc -b` 和所有 npm 脚本都不检查它；
+  要类型检查就手动 `npx tsc -p worker`。ESLint 覆盖它。
+- **确认上线**：
+  - 我工作的云端环境出不了网到 `workers.dev` 和 `api.cloudflare.com`，没法直接打开线上站点。
+  - 我能做的只有用 Cloudflare 的 MCP 工具（`workers_list`）看 Worker 的 `modified_on` 是否晚于合并时间。
+    PR #9 是合并后约两分钟完成部署。这只能证明**发生了一次部署**。
+  - 这个办法看不到页面内容：`workers_get_worker_code` 只返回 Worker 脚本（`worker/index.ts` + `worker/pages.ts`），
+    三个应用是静态资源，取不到。
+  - 所以真正的检查要在开 PR **之前**做：在已提交的 `nano-banana.html` 里搜新功能的界面文案
+    （标识符会被压缩掉，要搜用户看得见的字符串）。上线后再请主人在页面上确认看到了新东西。
 
 **代码风格**
 
-- 无分号、单引号、尾逗号、行宽约 120。仓库**没有** Prettier 配置；要格式化就用
-  `npx prettier --no-semi --single-quote --print-width 120`，用默认配置会把文件整体改乱。
+- 无分号、单引号、尾逗号、行宽约 120。仓库**没有** Prettier 配置，代码也不是用 Prettier 统一格式化的。
+  最接近现有风格的参数是 `npx prettier --no-semi --single-quote --print-width 120`，但它不是无损的：
+  对全部源码跑一遍仍会改动约 30 个文件（手工换行的联合类型、数组会被并成一行）。
+  **只对自己改过的文件用，不要整仓库 `--write`**；用默认配置会把每个文件整体改乱。
 - TypeScript `~6.0`：`erasableSyntaxOnly`（不能用 enum、namespace、参数属性）、`verbatimModuleSyntax`
   （类型要用 `import type`）、`noUnusedLocals` / `noUnusedParameters`。
 - 所有东西必须能内联进单文件：Worker 一律 `?worker&inline` 导入（`src/lib/localEditClient.ts`、`src/lib/jpegExport.ts`）。
@@ -115,7 +126,7 @@ src/
     veo.ts videoEngine.ts veoModels.ts       视频
   hooks/                     useRetryRun、useEditStudio、useSettings、usePromptWorkspace、usePromptFileSync …
   components/                run/ settings/ prompt/ gallery/ studio/ cloud/ common/
-  edit/                      局部重绘应用（lib/align.ts、blend.ts、mask.ts 也被生成器的合成器复用）
+  edit/                      局部重绘应用（lib/align.ts、blend.ts 也被生成器的合成器复用）
   video/                     视频应用
 worker/index.ts, pages.ts    Cloudflare Worker：登录、同步接口、Durable Object
 scripts/prepare-site.mjs     部署时把三个单文件复制进 site/
@@ -125,16 +136,22 @@ scripts/prepare-site.mjs     部署时把三个单文件复制进 site/
 
 - `runGeneration(call, params, signal, onEvent)`（`src/lib/retryEngine.ts`）：**每个 API key 一条并行通道**，
   共享 `collected / attemptsStarted / attemptsCompleted`。每个提供方最多 3 个 key。
-- 一次调用的结果分五类（`src/lib/errors.ts`）：
+- 一次调用的结果有六种 `kind`（类型 `AttemptOutcome` 在 `src/types.ts`，分类函数 `classifyResponse` /
+  `classifyError` 在 `src/lib/errors.ts`）。moderation 和 empty 的处理相同，下表合成一行：
 
 | 类别 | 判定 | 后果 |
 |---|---|---|
 | success | 返回了图 | 每张图都计入目标 |
 | moderation / empty | 被审核拦截或没有图 | 算一次尝试，继续重试 |
 | transient | 429、≥500、`TypeError`、消息含 fetch/network/ECONN | 不占尝试次数，退避后重试；连续第 7 次该通道退出 |
-| fatal | 400/401/403/404 或认不出的错误 | 只杀掉该通道 |
+| fatal | 400/401/403/404（且消息不是审核拦截）或认不出的错误 | 只杀掉该通道 |
 | aborted | 用户按了 Stop | 通道以 `stopped` 退出 |
 
+- **判定顺序**：先看是不是 abort；再用 `MODERATION_MESSAGE` 正则看消息是不是审核拦截，命中就算 moderation
+  （xAI 的审核拦截就是 HTTP 400）；然后才按状态码分 transient / fatal。
+- **xAI 和 OpenAI 的断网是 fatal**：这两个调用器把 fetch 的 `TypeError` 换成普通 `Error` 再抛出，
+  消息也不含 fetch/network，所以该通道直接退出。这是有意的（浏览器被 CORS 拦住时重试没有意义）。
+  只有 Gemini 和 Omni 的网络失败会退避重试。
 - 常量：`MAX_CONSECUTIVE_TRANSIENT=6`，退避 2 s 起倍增到 60 s。默认目标 5 张、尝试上限 50。
 - 模型表 `MODELS`（`src/lib/models.ts`）：
 
@@ -145,6 +162,15 @@ scripts/prepare-site.mjs     部署时把三个单文件复制进 site/
 | OpenAI | `gpt-image-2.5-flare`、`gpt-image-2.5-sunburst`、`gpt-image-2` |
 | xAI | `grok-imagine-image-2.0`、`grok-imagine-image-quality`、`grok-imagine-image` |
 
+- **加新模型时要知道的**：
+  - xAI 和 OpenAI 不改代码就能试新模型：设置面板里可以直接填模型 id（`Settings.xaiModelId`，两家共用这一个字段），
+    还能按 key 列出可用模型。
+  - 有些行为不看模型表，而是按 id 的正则判断：`supportsExtendedQuality`（`src/lib/openai.ts`）、
+    `supportsXaiQuality`（`src/lib/xai.ts`）。新 id 要确认落在正确的一边。
+  - **顺序有意义**：`MODELS[0]` 是默认模型，也是未知 id 的回退值。
+  - `aspectRatios` 不只是界面选项：`frame.ts` 用它决定修图时把图垫成什么形状。
+  - 局部重绘应用有自己的模型列表 `EDIT_MODELS`（`src/edit/lib/storage.ts`），视频应用是 `VEO_MODELS`。
+  - `?mock=1` 对所有提供方都返回假数据，测不到新模型的真实请求。
 - 参考图上限：xAI `MAX_XAI_SOURCES`=3，OpenAI `MAX_OPENAI_SOURCES`=16，Gemini 用 `model.maxReferences`（6 或 14）。
 - 存储：设置 `nbr.settings.v1`，key `nbr.apiKey|2|3`、`nbr.xaiApiKey|2|3`、`nbr.openaiApiKey|2|3`（localStorage）；
   参考照片在 IndexedDB `nbr-refs`。**图库里的图只在内存里，刷新就没了。**
@@ -179,7 +205,8 @@ scripts/prepare-site.mjs     部署时把三个单文件复制进 site/
   按这个顺序描述每张图，顺序一变提示词就对不上。
 - 开关 **"only around arrows"**（`localOnly`，默认开）：模型的回答不直接采用，而是交给本地合成器，
   只把箭头附近真正改变的部分贴回原图，其余像素保持原图。
-- "Take whole picture"：用户可以改为采用模型的整张回答（`takeWholePicture`）。
+- "Use whole picture" 按钮（`takeWholePicture`；旁边的 "Hold: whole picture" 是按住预览）：把模型的整张回答
+  作为一个新版本加入，原来的合成版本保留。它不重新请求模型，每个版本只能做一次。
 - 本地合成结果在应用内一直是 PNG；用户选的是 JPG 时只打 `saveAs` 标记，**下载时**才编码一次（`exportBlob`）。
 
 **与重试引擎的衔接**（`makeLocalEditCaller`，`src/lib/localEditClient.ts`）
@@ -188,19 +215,23 @@ scripts/prepare-site.mjs     部署时把三个单文件复制进 site/
 |---|---|---|
 | 可用 | 一张图（合成结果） | 成功 |
 | 普通拒绝（例如箭头附近没变化、画成了另一张图） | 空回答 | 算一次失败，自动重试 |
-| `final` 拒绝（回答的形状不对） | 先垫框重发一次；仍不行就抛普通 `Error` | 该通道终止，提示用户关掉 only around arrows |
+| `final` 拒绝（回答的形状不对） | 这次是不垫框发出的、且不是 OpenAI：按回答的实际形状学一个框，在同一次尝试里垫框重发一次，之后的调用都用这个框。已垫过框、是 OpenAI、或重发后仍不行：设 `editor.problem` 并抛普通 `Error` | 该通道终止；一张都没出来时提示用户关掉 only around arrows |
 | Worker 崩溃（`EditorDead`）/ 用户 Stop | 原样抛出 | 终止 / 停止 |
 
 **形状问题（`src/lib/frame.ts`）**
 
-合成要求回答和原图形状完全一致，但模型只会按固定比例出图，上传的图往往不符合。做法：
+合成要求回答和原图的长宽比基本一致（偏差不超过 3%，`AR_TOLERANCE`；这么小的差别当作轻微拉伸处理），
+但模型只会按固定比例出图，上传的图往往不符合。做法：
 
 - `frameShape` 找最近的可用比例，`frameTo` 用镜像内容把图垫到那个形状，`marksInFrame` 换算箭头位置，
   `cropFromFrame` 再把原图范围裁回来。
 - 模型的"3:4"实际会偏几个百分点，而且每个模型不一样。所以用模块级的 `learned` 表（键 `modelId|ratio`）
   **从真实回答里学**实际形状，而不是写死表格。它只在本次页面打开期间有效。
 - OpenAI 可以直接指定尺寸（`matchSize` → `openaiSizeMatching`），1:3 到 3:1 之间不需要垫框。
-- 发送分辨率按像素数选（`localSettings`）：超过 5.5 MP 用 4K，超过 1.6 MP 用 2K，否则 1K。
+- 偏差在 `FIT_TOLERANCE`（0.03；学到真实形状后用 `KNOWN_TOLERANCE` 0.025）以内的图不垫框，直接发。
+- 要求模型**回答**的分辨率按所发图片的像素数选（`localSettings`，在 `src/hooks/useEditStudio.ts`）：
+  Gemini 超过 5.5 MP 用 4K、超过 1.6 MP 用 2K、否则 1K；xAI 超过 1.6 MP 用 2k、否则 1k；OpenAI 用 `matchSize`。
+  同时把输出格式固定为 PNG。
 
 ### 5.4 本地合成器（`src/lib/localEdit.ts`）
 
@@ -216,10 +247,13 @@ scripts/prepare-site.mjs     部署时把三个单文件复制进 site/
 1. **形状检查**：长宽比偏差超过 `AR_TOLERANCE` → `final` 拒绝。这是唯一的 `final`。
 2. **对位**：整体平移（`analyzeResult`，来自 `src/edit/lib/align.ts`）；整体缩放由 `measureZoom` + `fitAxisScale`
    （Theil–Sen）估计，**只有缩放后颜色失配确实下降（`ZOOM_GAIN`）才采用**，因为大面积改动会骗过估计。
-3. **稠密位移场**（`blockFlow`、`warpPlanes`，`src/lib/flow.ts`）：只用于检测，**贴回去的像素不做扭曲**。
+3. **稠密位移场**（`blockFlow`、`warpPlanes`，`src/lib/flow.ts`）：逐像素的位移只用于检测。
+   另外每个变化区域取位移场在它周边带上的中位数，作为贴回时的平移初值（`clusterPlacements`，
+   再由 `refineOffset` 在 ±`LOCAL_ALIGN`=3 px 内微调）。**贴回去的像素不做逐像素扭曲。**
 4. **差异**：模糊后的 Y'CbCr 上取 ±1 px 内的最小差（`tolerantLabDistance`，名字里的 Lab 是历史遗留）。
-5. **噪声模型** `a + b·梯度`：全局一份，每个箭头周围再一份，都有上限（`NOISE_A_MAX`、`NOISE_B_MAX`、`LOCAL_NOISE_CAP`）。
-6. **`looksUnrelated`**：大部分细节都对不上 → 普通拒绝"画成了另一张图"。
+5. **全局噪声模型** `a + b·梯度`，有上限（`NOISE_A_MAX`、`NOISE_B_MAX`）。
+6. **`looksUnrelated`**（不依赖噪声模型）：大部分细节都对不上 → 普通拒绝"画成了另一张图"。
+   通过之后，`detectChange` 再为每个箭头周围各拟合一份局部噪声模型，上限是全局模型的 `LOCAL_NOISE_CAP` 倍。
 7. **判定每个箭头是否"改到了"**：`strong`（差异 > max(`HIGH_MIN`, `HIGH_K`·噪声)）和 `weak`（`LOW_MIN`/`LOW_K`）。
    箭头尖 `CORE_RADIUS` 内最近的强变化块就是这个箭头的编辑对象；要求质量 ≥ `SEED_FLOOR`，
    并且峰值够高（`SEED_PEAK`）或面积够大（`SEED_PLENTY`）。没有箭头改到 → 普通拒绝。
@@ -260,7 +294,8 @@ scripts/prepare-site.mjs     部署时把三个单文件复制进 site/
 
 - 被前景物体挡住一截的细长物体（勺柄、长线缆）只会被取到一部分。连接距离停在 `closeR`，
   是因为放宽后会把箭头旁边被模型顺手重画的眼睛拉进编辑范围。
-- 只有一个整体缩放，不处理旋转；贴入的像素只做整体缩放加每块的平移。
+- 只有全图统一的缩放（通常两轴同一个系数；两轴明显不一致时 x、y 各一个），不处理旋转。
+  贴入的像素只做这个整体缩放，加每个变化区域各自的一个平移。
 - 颜色与原来很接近的那部分编辑可能被留成原图。见第 8.1 节。
 
 ### 5.5 图库、上传、保存
@@ -269,14 +304,17 @@ scripts/prepare-site.mjs     部署时把三个单文件复制进 site/
   PNG/JPEG、长边 ≤ `MAX_UPLOAD_SIDE`（4096）、且方向是正的（`storedUpright` 读 EXIF）时**原样保留字节**，
   否则摆正、缩小后重画。字节会复制一份，因为磁盘上的文件被移动后 `File` 就读不出来了。
 - 下载：`exportBlob` → `makeFilename` → 浏览器下载；"Download all" 打包成 zip（`downloadAllAsZip`）。
-- **自写 JPEG 编码器**（`src/lib/jpegEncode.ts`，基线 4:4:4，`SAVE_QUALITY`=95）：浏览器 canvas 的 JPEG 在质量低于 100 时
-  会把颜色分辨率减半，锐利边缘会出现色彩拖影。编码在 Worker 里跑，失败时回到主线程。`jpegEncode.ts` 不能依赖 DOM。
+- **自写 JPEG 编码器**（`src/lib/jpegEncode.ts`，基线 4:4:4）：浏览器 canvas 的 JPEG 在质量低于 100 时
+  会把颜色分辨率减半，锐利边缘会出现色彩拖影。质量由调用方传入：`SAVE_QUALITY`=95 定义在 `imageUtils.ts`，
+  `exportBlob` 和 `uploadToImage`（重画 JPEG 时）使用。编码在 Worker 里跑，失败时回到主线程。
+  `jpegEncode.ts` 不能依赖 DOM。
 
 ### 5.6 局部重绘应用（`src/edit/`）
 
 画选区 → 发原图和黑白蒙版 → `analyzeResult` 估计平移 → `compositeResult` 只把选区贴回原图
 （可选无缝融合：增益/偏移拟合 + 膜校正 + 颗粒匹配）。只用 Gemini（`gemini-3.1-flash-image`、`gemini-3-pro-image-preview`）。
-`align.ts`、`blend.ts`、`mask.ts` 被生成器的合成器复用，**改它们会同时影响两个应用**。
+`align.ts` 和 `blend.ts` 被生成器的合成器（`src/lib/localEdit.ts`）复用，**改它们会同时影响两个应用**。
+`mask.ts` 里生成器只用到通用的 `blobToBase64`，蒙版相关的函数只有本应用在用。
 
 ### 5.7 视频应用（`src/video/`）
 
@@ -294,6 +332,16 @@ Veo 3.1（`veo-3.1-generate-preview`、`-fast-`、`-lite-`）：提交 → 每 8
 - 客户端 `src/lib/cloud.ts`：三个应用的 `main.tsx` 都先 `await bootCloud()` 再渲染。它接管
   `Storage.prototype.setItem/removeItem`，把所有通过 `isSyncedKey` 的 `nbr.*` 键和参考照片（`refs:generator`）同步上去。
 - 不同步的：API key、`nbr.promptSync.updatedAt`、生成的图片和视频。
+- **加新的同步状态时要知道的**：
+  - 键名必须匹配 Worker 的 `KEY_PATTERN`：`nbr.` 加 1–80 个字母、数字、`.`、`_`、`-`，或 `refs:<slot>`。
+    一个不合规的键会让整批推送返回 400，客户端随后一直重试同一批，**所有同步都会卡住**。
+  - 想让某个 `nbr.*` 键只留在本机：加进 `DEVICE_ONLY_KEYS`（`src/lib/cloud.ts`），或者不用 `nbr.` 前缀。
+  - 二进制数据只能作为参考照片同步：slot 必须在 `REF_SLOTS` 里（目前只有 `generator`），内容必须是图片、不超过 12 MiB。
+    别的东西（比如第 8.2 节的图库持久化）需要改 Worker。
+  - 往 `Settings` 加字段：要在 `DEFAULT_SETTINGS` 里给默认值，并在 `normalizeSettings` 里校验
+    （都在 `src/lib/storage.ts`），后者是 localStorage 和导入文件共用的唯一关口。
+  - 单独的新键不会进入文件同步和备份文件，它们只包含 `{workspace, settings}`。
+  - 冲突提示条里各个键的显示名在 `KEY_LABELS`（`src/components/cloud/CloudBanner.tsx`）。
 
 ## 6. 不能破坏的约定
 
@@ -302,11 +350,20 @@ Veo 3.1（`veo-3.1-generate-preview`、`-fast-`、`-lite-`）：提交 → 每 8
    必须仍然匹配这个正则。**
 2. **改 `src/` 必须重建并提交三个单文件。**
 3. **合成区域之外逐位等于原图。** 合成结果在应用内保持 PNG，JPEG 只在下载时编码。
-4. **错误分类靠字符串。** `classifyError` 在消息里找 "abort"（→ 停止）、"fetch"/"network"（→ 可重试）、
-   裸的 400/429/5xx 数字（→ HTTP 状态）。所以：
-   - `openai.ts` 故意写 "Content moderation blocked…" 让通道继续重试；
-   - xAI/OpenAI 的"连不上"消息故意避开 fetch/network 两个词，让 CORS 拦截直接终止而不是白试六次；
-   - 合成器的 `final` 拒绝理由里不能出现上面任何一个词或数字。
+4. **错误分类靠字符串。** `classifyError` 按顺序判断：
+   1. 消息含 "abort" → 停止；
+   2. 消息匹配 `MODERATION_MESSAGE`（content moderat…、moderated、moderation blocked、safety filter/system、
+      content policy violation 等）→ 内容拒绝，继续重试，**优先于状态码**；
+   3. `err.status`，或消息里裸的 400/401/403/404/429/500/502/503/504 → 429 和 5xx 可重试，其余终止；
+   4. 没有状态码时，`TypeError` 或消息含 fetch/network/ECONN → 可重试；
+   5. 其余一律终止。
+
+   由此而来的几处故意写法：
+   - `openai.ts` 故意写 "Content moderation blocked…"，让带 400 的审核拦截继续重试；
+   - xAI/OpenAI 在 fetch 失败时把原始的 `TypeError` 换成普通 `Error` 再抛，新消息也避开 fetch/network，
+     让 CORS 拦截直接终止。改文案或改回抛原始错误都会让重试回来；
+   - 合成器的 `final` 拒绝理由里不能出现以上任何一类词或数字（包括 moderation、safety 一类）。
+
    **改这些文案就是改行为。**
 5. **只有形状拒绝是 `final`。** 内容类拒绝必须是普通拒绝，交给重试循环。
 6. **图片顺序**：原图、示意图、参考图，必须与 `buildEditPrompt` 里的编号、`imagesExplained: true` 保持一致。
@@ -316,7 +373,8 @@ Veo 3.1（`veo-3.1-generate-preview`、`-fast-`、`-lite-`）：提交 → 每 8
 9. **版本号**取自 `useEditStudio` 里 state 更新函数之外的 `versionCounters` ref（为了 React StrictMode），不要挪进更新函数。
 10. **合成器用原图的原始字节准备**（`source.image.blob`），不用垫框后的图。
 11. **云同步层自己的写入**必须用 `rawSetItem` / `rawRemoveItem` 和 `saveStoredReferences(slot, refs, false)`，否则会被当成用户编辑再推回去。
-    应用不能在 `bootCloud()` 完成前读 localStorage。
+    应用不能在 `bootCloud()` 完成前从 localStorage 初始化状态。唯一的例外是 `src/main.tsx` 为避免主题闪烁，
+    在 boot 之前先 `applyTheme(loadTheme())` 一次，boot 之后再执行一次。
 12. **`usePersistedReferences` 在首次加载完成前不能写**（`loadedRef`），否则会清空已存的参考照片。
 13. **对象 URL 故意不回收**（`clearImages`）：工作室可能还在显示这些图。
 14. Worker 的 `Referrer-Policy` 是 `same-origin`：改成 `no-referrer` 会让登录 POST 的 `Origin` 变成 `null`，被同源检查拒绝。
@@ -328,7 +386,9 @@ Veo 3.1（`veo-3.1-generate-preview`、`-fast-`、`-lite-`）：提交 → 每 8
 
 `/tmp/claude-0/-home-user-nano-banana-redo/4b44d2d2-3f26-533e-9d9e-86e1eec6ebb3/scratchpad`
 
-如果你接手时这个目录已经不存在，下面是重建它所需要知道的全部。把合成器的回归测试搬进仓库是我建议的**第一件事**（第 8.3 节）。
+下面把这个目录记作 `$S`。它约 13 GB，绝大部分是可丢弃的输出；有价值的是约 0.5 MB 的脚本和约 1.4 GB 的用例数据。
+7.1–7.2 先讲思路（目录没了也能照着重建最小的一套），7.3 给出目录还在时的具体命令。
+把合成器的回归测试搬进仓库是我建议的**第一件事**（第 8.3 节）。
 
 ### 7.1 合成器离线基准
 
@@ -338,7 +398,7 @@ Veo 3.1（`veo-3.1-generate-preview`、`-fast-`、`-lite-`）：提交 → 每 8
   `ideal.png`（原图加上"只有想要的改动"）、`gt.png`（改动的软蒙版）、`meta.json`
   （`marks:[{x,y}]` 为 0–1 比例，`expect` 为 `ok` / `reject` / `any`），可选 `protect.png`（必须保持原样的区域）。
 - **生成**（`bench/sim.py`）：在 scikit-image 自带的样例照片（astronaut、coffee、chelsea 等）上做
-  填色、换色、提亮、加斑块，得到 `ideal`；再用 `repaint()` 模拟模型重绘整张图：
+  移除物体（用周围内容把洞补上）、换色、提亮、加斑块，得到 `ideal`；再用 `repaint()` 模拟模型重绘整张图：
   平移、缩放、旋转、6×6 平滑扭曲、模糊再锐化、新噪声、增益/偏移/gamma 漂移、JPEG 压缩、可选改变输出分辨率。
   三个强度：
 
@@ -365,14 +425,22 @@ window.runCase = async (origB64, resB64, marks) => {
 - **指标**：
   - `kept`：想要的改动保住了多少，`1 − err(合成, ideal) / err(原图, ideal)`，在改动核心区上算；
   - `extra%`：改动范围（外加短边 5% 的余量）之外被替换的像素比例；
-  - `protect`：`protect.png` 区域里逐位相同的比例，**应当是 100**；
+  - `protect`：`protect.png` 区域（先扣掉改动范围及其短边 5% 的余量）里逐位相同的比例，**应当是 100**；
   - `seam` / `seamGrad`：接缝外侧 ±3 px 带上的颜色 / 梯度误差；
-  - 该接受的被拒绝、该拒绝的被接受，记为 wrong-kind。
-- **规模**：原始基准 36 例（三张样例照片 × 多种编辑 × 三个强度）；后来几轮对抗式评审又加了三百多例
+  - 该接受的被拒绝、该拒绝的被接受，记为 wrong-kind。`expect: any` 两个评分脚本处理不同：
+    `suite/score.py` 把它当作"应当接受"，`bench/metrics.py` 对它两种结果都算通过。
+- **规模**：原始基准 36 例（三张样例照片上的 19 个场景；每个场景默认生成 `mild` 和 `strong`，
+  `warped` 只用于一例，4K 那一例只有 `mild`）。后来几轮对抗式评审又加了三百多例
   （发丝、耳钉、痣、眼镜、孔洞、画面边缘、双箭头、严重压缩、暗角、缩放漂移等），合计 344 例。
-- **最后一次全量结果**（PR #9 的代码，336 例）：接受 312、拒绝 24、wrong-kind 6、`protect<100` 3、平均 `kept` 0.916；
-  36 例基准全部通过。PR #9 相对 PR #7：接缝颜色误差 1.20 → 1.24，接缝梯度误差 1.55 → 1.65
-  （贴入层更锐利的代价，可以接受）。
+  这三百多例**不是** `sim.py` 生成的，各有自己的生成脚本（`$S/review3/` 下），多数还带 `protect.png`。
+- **最后一次全量结果**（PR #9 的代码，标签 `s1`，336 例）：接受 312、拒绝 24、平均 `kept` 0.916。
+  PR #9 相对 PR #7：接缝颜色误差 1.20 → 1.24，接缝梯度误差 1.55 → 1.65（贴入层更锐利的代价，可以接受）。
+- **现有的已知不达标项**（判断"是不是回归"要对照它们）：
+  - wrong-kind 6 个：`a.E20-rocket-sky`、`a.E23-warm-lower-10`、`a.E23-warm-lower-12`、
+    `e.F-beige-sticker-faint__mild`，以及 `b.A-subtle-helmet__mild` / `__strong`。
+    最后两个是 `expect: any` 的基准用例，被拒绝也算合理，所以 36 例基准按 `metrics.py` 仍是全部通过。
+  - `protect<100` 3 个：`h.M-meadow-1024`、`x.F-hair-blue-facedrift10`、`x.F-hair-blue-facedrift15`。
+  - 第 8.1 节的 8 个 `t.T3*` / `t.T4*` 用例是之后加的，只单独跑过，没有进过全量。
 
 ### 7.2 端到端脚本
 
@@ -386,14 +454,51 @@ Playwright 打开构建好的 `nano-banana.html`（`file://`），先往 localSt
 - 上传（EXIF 方向、超大图、非标准比例垫框）、拖入、粘贴；
 - `@N` 引用与选择器；
 - 保存格式（应用内 PNG，下载和 zip 按所选格式）；
-- Stop 发生在准备阶段 / 合成阶段，Worker 崩溃后回到主线程；
+- Stop 发生在准备阶段 / 合成阶段；Worker 起不来（构造函数不存在或抛错）时改在主线程里跑。
+  Worker 在合成途中崩溃不会回退，而是以 `EditorDead` 结束这一轮，这条路径没有脚本覆盖；
 - 云端：登录、同步、冲突、CSRF、开放重定向、锁定（需要 `npx wrangler dev` 跑在 8787，
   并且每次用全新的 `--persist-to` 目录，因为锁定测试会把自己锁住 15 分钟）。
 
 注意：这些脚本靠界面文案定位元素（"Apply edit"、"only around arrows" 等），改文案会让它们失效；
-跑之前要先 `npm run build:single`。
+跑之前要先 `npm run build:single`。多数脚本只打印结果而不断言，退出码不代表通过，要读输出。
 
-### 7.3 没有验证过的
+### 7.3 临时目录还在时的具体命令
+
+```bash
+S=/tmp/claude-0/-home-user-nano-banana-redo/4b44d2d2-3f26-533e-9d9e-86e1eec6ebb3/scratchpad
+PY=$S/bench/venv/bin/python          # 系统的 python3 没有 PIL
+
+# 合成器全量回归（344 例）：打包当前源码 → 跑 → 与 PR #9 的基线 s1 比较
+cd /home/user/nano-banana-redo
+npx esbuild $S/suite/harness.ts --bundle --format=iife --outfile=$S/suite/harness_mine.js
+cd $S/suite
+node run.cjs mine mine --par 4       # node run.cjs <包名> <标签> [用例名过滤…] [--par N]
+$PY score.py mine --vs s1            # 列出相对基线 WORSE / BETTER 的用例
+$PY viz.py <用例> mine s1            # 并排对比图，输出到 viz/
+node dbg.cjs <用例>                  # 强/弱变化、连接、生长的调试图；用的是 dbg.js，
+                                     # 改源码后要先在仓库根目录用同样的 esbuild 命令从 dbg.ts 重新打包
+
+# 36 例基准（固定加载 bench/harness.js，同样要先重新打包）
+cd /home/user/nano-banana-redo
+npx esbuild $S/bench/harness.ts --bundle --format=iife --outfile=$S/bench/harness.js
+cd $S/bench && node run.cjs mine && $PY metrics.py mine --no-render
+
+# 端到端（先 npm run build:single）
+node $S/local-e2e.cjs                # 本地修图整轮
+node $S/upload-test.cjs; node $S/upload-test2.cjs    # 上传（输入文件在 $S/upload/）
+node $S/round2-test.cjs              # 学到的模型形状、@N、选择器
+node $S/save-test.cjs                # 保存格式
+node $S/mention/mention-test.cjs     # 各提供方的 @N 改写
+```
+
+- 用例前缀表示来源：`b.` 是 36 例基准，`a.` `e.` `g.` `h.` `r.` `s.` `x.` 来自各轮评审，
+  **`t.` 是主人自己的照片（`$S/thigh/case`），不能入库，也不要外传**。
+- 打包后的 harness 是源码的快照，每次改源码都要重新打包。
+- 路径都是写死的绝对路径（harness 里的仓库路径、`suite/cases` 里的符号链接），搬动前要先改。
+- Playwright 不是仓库的依赖，在那个环境里是从全局安装解析的。
+- 共用的端到端辅助函数在 `$S/review3/lib.cjs`。
+
+### 7.4 没有验证过的
 
 以下都只用模拟回答测过，**没有用真实 API key 验证**（我这边拿不到 key，也连不上线上站点）：
 
@@ -413,7 +518,8 @@ Playwright 打开构建好的 `nano-banana.html`（`file://`），先往 localSt
   使它与原图的 RGB 最大通道差中位数为 12 时，那一块有 15% 被留成原图；中位数为 8 时有 67%。
   单箭头、`mild` 重绘强度。
 - **主人的解决办法**：多放一个箭头指到那一块，残留就没有了。主人因此认为"可能也不是个问题"，要求先不改。
-  多箭头为什么有效没有单独做模拟验证，但与机制吻合：每个箭头各自认领尖端附近的变化。
+  多箭头为什么有效没有单独做模拟验证，但与机制吻合：每个箭头各自认领尖端 `CORE_RADIUS` 内的**强变化**块，
+  弱变化再从这个新认领的块往外跟随。注意：如果新箭头尖端附近只有弱变化，这个箭头会被判为"没改到"，什么也认领不到。
 - **如果以后要修**：候选方案是让"被已认领的变化包围、并紧贴着它"的弱变化也并入。风险是放松了保护范围，
   正好与 `toneDrift` 和连接距离那几条防线相冲突（它们防的就是脸被带进来），必须重跑全部带 `protect.png` 的用例。
 - 给使用者的建议：改大面积的东西（整条裙摆）时沿着要变的区域放 2–3 个箭头，尤其是两端。
@@ -432,8 +538,12 @@ Playwright 打开构建好的 `nano-banana.html`（`file://`），先往 localSt
 
 ### 8.3 我建议接手后先做的
 
-1. **把合成器基准搬进仓库**（例如 `tools/`）：`sim.py`、harness、运行脚本、评分脚本合计几十 KB。
-   现在合成器的每个阈值都靠这套东西兜底，而它只存在于临时目录里。注意：用例里有一组是主人自己的照片，**不能入库**。
+1. **把合成器基准搬进仓库**（例如 `tools/`）。现在合成器的每个阈值都靠这套东西兜底，而它只存在于临时目录里。
+   - 最小的一套是 36 例基准：`sim.py`、harness、运行脚本、评分脚本合计几十 KB，用例可以由 `sim.py` 重新生成
+     （需要 scikit-image 的样例照片）。
+   - 完整的 344 例要大得多：评审用例的生成脚本约 0.3 MB，用例数据约 1.4 GB，不适合直接入库，需要先整理生成脚本。
+   - `t.` 开头的用例是主人自己的照片，**不能入库**。
+   - 入库前要把写死的绝对路径改成相对路径。
 2. **更新 README.md**（见第 9 节）。
 
 ### 8.4 读代码时看到、尚未处理的问题
@@ -446,7 +556,8 @@ Playwright 打开构建好的 `nano-banana.html`（`file://`），先往 localSt
 - `sharpAnswer` 忽略回答的 alpha，并且在 gamma 编码值上重采样。
 - 工作室的会话只在内存里；`learned` 形状表也是，且不区分分辨率档位。
 - `LocalEditInfo.coverage` 算了但没有显示。
-- 垫框只用于本地合成；采用整张回答的编辑用 `aspectRatio: 'auto'`。
+- 垫框只用于本地合成（only around arrows 开着且有箭头）。关掉它或没有箭头的编辑不垫框，
+  以 `aspectRatio: 'auto'` 直接发原图，非标准比例的上传图得到什么形状由模型决定。
 - 对 OpenAI，`learnShape` 返回 null，形状不符会直接终止。
 
 生成器：
@@ -475,11 +586,12 @@ Prompt 与同步：
 
 ## 9. README.md 的过时之处
 
-`DEPLOY.md` 是准确的（只是还把旧分支名列为 `main` 之外的备选）。`README.md` 落后于代码：
+`DEPLOY.md` 是准确的（只是第 2 步还写着"还没合并时选 `claude/jolly-ride-8g2e2e`"；代码早已全部合并，选 `main` 即可）。
+`README.md` 落后于代码：
 
 - 写的是"两个应用、基于 Gemini"，实际是三个页面，另有 OpenAI 和 xAI 两个提供方；
 - 没有提视频应用和 `build:single:video`；
-- 只提了 Google AI Studio 的 key，实际每个提供方有 3 个 key 位；
+- 只提了 Google AI Studio 的 key 和"可选的第二个 key"，实际是三个提供方、每个 3 个 key 位；
 - 模型列表只有三个 Gemini 模型；
 - 没有提修图工作室的近期功能：上传后编辑、箭头、only around arrows、`@N` 引用。
 
