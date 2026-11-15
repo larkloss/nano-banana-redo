@@ -32,3 +32,4 @@ site
 tools/compositor-bench/cases
 tools/compositor-bench/out
 tools/compositor-bench/.build
+tools/compositor-bench/__pycache__
