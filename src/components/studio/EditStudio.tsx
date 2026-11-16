@@ -394,8 +394,12 @@ export function EditStudio({
                   <button
                     type="button"
                     onClick={() => void applyTouches()}
-                    disabled={touching.picked.length === 0 || isRecutting}
-                    title="Cuts the same answer out again — no new request, nothing is spent"
+                    disabled={touching.picked.length === 0 || isRunning}
+                    title={
+                      isRunning && !isRecutting
+                        ? 'Wait for the edit that is running to finish'
+                        : 'Cuts the same answer out again — no new request, nothing is spent'
+                    }
                     className="rounded-full bg-blue-600 px-3 py-1 font-semibold text-white hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-40"
                   >
                     {isRecutting ? 'Working…' : `Apply ${touching.picked.length || ''} — no new request`}
@@ -806,11 +810,16 @@ function TurnView({
           <div className="space-y-1.5">
             <div className="flex items-center gap-2">
               <span className="h-2 w-2 animate-pulse rounded-full bg-blue-400" />
-              <span>
-                Working on it… try <b>{Math.max(1, attempts + 1)}</b>
-                {live ? ` of ${live.cap}` : ''}
-                {answers > 0 && ` · ${answers}/${turn.candidates} done`}
-              </span>
+              {turn.findObject && !turn.found ? (
+                // (the edit itself has not been asked for yet)
+                <span>Finding the object first — asking Gemini where it is…</span>
+              ) : (
+                <span>
+                  Working on it… try <b>{Math.max(1, attempts + 1)}</b>
+                  {live ? ` of ${live.cap}` : ''}
+                  {answers > 0 && ` · ${answers}/${turn.candidates} done`}
+                </span>
+              )}
               <button type="button" onClick={onStop} className="ml-auto text-[11px] text-zinc-500 hover:text-red-400">
                 stop
               </button>
@@ -968,7 +977,19 @@ function foundNote(turn: EditTurn, results: EditVersion[]): string {
       `the area found at ${unused.length === 1 ? 'arrow' : 'arrows'} ${listing(unused)} wasn’t gone by (it didn’t fit the arrow, or what it held stayed as it was)`,
     )
   if (missing.length > 0) parts.push(`nothing found at ${missing.length === 1 ? 'arrow' : 'arrows'} ${listing(missing)}`)
-  if (found.faces.length > 0) parts.push(`${found.faces.length} ${found.faces.length === 1 ? 'face' : 'faces'} guarded`)
+  if (found.faces.length > 0) {
+    // An arrow pointing into a face's area still edits what it points at there
+    const into = turn.marks.some((m) =>
+      found.faces.some((f) => m.x >= f.x0 && m.x <= f.x1 && m.y >= f.y0 && m.y <= f.y1),
+    )
+    parts.push(
+      `${found.faces.length} ${found.faces.length === 1 ? 'face' : 'faces'} guarded` +
+        (into ? ' (an arrow points into one: only what it points at changes there)' : ''),
+    )
+  } else if (named.length > 0) {
+    // (with none reported, nothing guards a face that lies in a found area)
+    parts.push('no face reported — if there is one near the thing, check it')
+  }
   const text = parts.join(' · ')
   const sentence = text.charAt(0).toUpperCase() + text.slice(1)
   return named.length > 0 || found.faces.length > 0 ? `${sentence}. Hold “what changed” to see where.` : `${sentence}.`

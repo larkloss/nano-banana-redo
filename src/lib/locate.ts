@@ -178,7 +178,13 @@ export function parseLocated(text: string, arrows: number): Located {
   for (const entry of objects) {
     if (!isRecord(entry)) continue
     const arrow = typeof entry.arrow === 'string' ? Number(entry.arrow) : entry.arrow
-    const index = typeof arrow === 'number' && Number.isFinite(arrow) ? Math.round(arrow) - 1 : -1
+    // (with one arrow and one thing, the number goes without saying)
+    const index =
+      typeof arrow === 'number' && Number.isFinite(arrow)
+        ? Math.round(arrow) - 1
+        : arrows === 1 && objects.length === 1
+          ? 0
+          : -1
     const box = toArea(entry.box_2d)
     if (index < 0 || index >= arrows || !box || extents[index]) continue
     const mask = typeof entry.mask === 'string' ? toMask(entry.mask) : undefined
@@ -203,9 +209,11 @@ function parseJson(text: string): unknown {
     .replace(/^```(?:json)?\s*/i, '')
     .replace(/```\s*$/, '')
   const candidates = [trimmed]
-  const from = trimmed.indexOf('{')
   const to = trimmed.lastIndexOf('}')
-  if (from >= 0 && to > from) candidates.push(trimmed.slice(from, to + 1))
+  // from the first brace, or from the one that opens the answer itself
+  const key = trimmed.search(/"(?:objects|faces)"/)
+  for (const from of [trimmed.indexOf('{'), key >= 0 ? trimmed.lastIndexOf('{', key) : -1])
+    if (from >= 0 && to > from) candidates.push(trimmed.slice(from, to + 1))
   for (const candidate of candidates) {
     try {
       return JSON.parse(candidate)

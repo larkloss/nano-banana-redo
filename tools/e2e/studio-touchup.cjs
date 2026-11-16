@@ -239,6 +239,7 @@ async function disturbed(p, before, after, discs) {
     await p.waitForFunction(() => /Done in|Done on|Gave up|went wrong|Stopped/.test(document.querySelector('[role=dialog]').innerText), null, { timeout: 90000 })
     const txt = await p.evaluate(() => document.querySelector('[role=dialog]').innerText)
     check('falls back to the older request when the Interactions API refuses, with the typed model', /Done/.test(txt) && calls.locate === 1 && calls.locateOld === 1 && calls.locateBodies[0].model === 'gemini-4-carbon' && /Found: arm \(1\)/.test(txt), `calls ${calls.locate}+${calls.locateOld}, ${(txt.match(/Found:[^\n]*/) || ['(no note)'])[0]}`)
+    check('with no face reported the note says so', /no face reported/.test(txt), (txt.match(/Found:[^\n]*/) || ['(no note)'])[0])
     check('Carbon is asked to think at its low level, either way', calls.locateBodies[0].generation_config?.thinking_level === 'low' && calls.oldBodies[0]?.generationConfig?.thinkingConfig?.thinkingLevel === 'LOW', JSON.stringify([calls.locateBodies[0].generation_config, calls.oldBodies[0]?.generationConfig?.thinkingConfig]))
     check('no page errors beyond the refused request', errors.filter((e) => !/404/.test(e)).length === 0, errors.join(' | '))
     await p.close()
