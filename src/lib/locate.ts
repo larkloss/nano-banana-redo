@@ -29,17 +29,48 @@ export interface Located {
 // Long side of the pictures sent: enough to tell things apart, and boxes come
 // back normalised, so nothing depends on it
 const LOCATE_MAX_EDGE = 1280
+// The edit doesn't wait longer than this for the answer
+const LOCATE_TIMEOUT_MS = 45_000
 
 export async function locateObjects(
   apiKey: string,
   modelId: string,
   picture: Blob,
   marks: EditMark[],
-  signal: AbortSignal,
+  outer: AbortSignal,
 ): Promise<Located> {
   if (isMockMode()) return mockLocated(marks)
 
+  // Stopped by the user, or out of time
+  const limit = new AbortController()
+  const onStop = () => limit.abort()
+  if (outer.aborted) limit.abort()
+  outer.addEventListener('abort', onStop, { once: true })
+  let late = false
+  const timer = setTimeout(() => {
+    late = true
+    limit.abort()
+  }, LOCATE_TIMEOUT_MS)
+  try {
+    return await ask(apiKey, modelId, picture, marks, limit.signal)
+  } catch (err) {
+    if (late && !outer.aborted) throw new Error('no answer in time', { cause: err })
+    throw err
+  } finally {
+    clearTimeout(timer)
+    outer.removeEventListener('abort', onStop)
+  }
+}
+
+async function ask(
+  apiKey: string,
+  modelId: string,
+  picture: Blob,
+  marks: EditMark[],
+  signal: AbortSignal,
+): Promise<Located> {
   const [plain, guide] = await Promise.all([smallCopy(picture), renderGuide(picture, marks)])
+  if (signal.aborted) throw new DOMException('Stopped', 'AbortError')
   const ai = new GoogleGenAI({ apiKey })
   const prompt = locatePrompt(marks)
   // Gemini 4 Carbon thinks at "medium" unless told otherwise, and bills every
@@ -60,8 +91,10 @@ export async function locateObjects(
         ],
         response_format: { type: 'text', mime_type: 'application/json' },
         ...(quick ? { generation_config: { thinking_level: 'low' as const } } : {}),
+        // The pictures are not to be kept on Google's side for later turns
+        store: false,
       },
-      { signal },
+      { signal, maxRetries: 1 },
     )
     text = interactionText(interaction)
     if (!text.trim()) throw new Error('the model gave no answer')
@@ -126,22 +159,25 @@ function locatePrompt(marks: EditMark[]): string {
     'Answer with JSON only, in this form: ' +
       '{"objects":[{"arrow":1,"label":"a few words","box_2d":[ymin,xmin,ymax,xmax]}],' +
       '"faces":[{"box_2d":[ymin,xmin,ymax,xmax]}]}. ' +
-      'Coordinates are normalised to 0-1000 over image 1. If you can, also give each object a "mask": a base64 PNG ' +
-      'segmentation mask of the thing within its box. One entry per arrow; leave out an arrow whose thing you ' +
-      'cannot find. "faces" is an empty list if there are none.',
+      'Coordinates are normalised to 0-1000 over image 1. One entry per arrow; leave out an arrow whose thing you ' +
+      'cannot find. Always include "faces": an empty list if there are none.',
   ].join('\n')
 }
 
 // Exported for tests. Anything that isn't a usable box is dropped rather
-// than guessed at.
+// than guessed at — but an answer that doesn't say where the faces are (not
+// even "none") isn't used at all: without that, taking a thing's faint
+// change could take a face that lies in its box.
 export function parseLocated(text: string, arrows: number): Located {
   const raw = parseJson(text)
+  if (!isRecord(raw) || !Array.isArray(raw.faces)) throw new Error('the answer didn’t say where the faces are')
   const extents: (ObjectExtent | null)[] = Array.from({ length: arrows }, () => null)
   const labels: (string | null)[] = Array.from({ length: arrows }, () => null)
   const objects = isRecord(raw) && Array.isArray(raw.objects) ? raw.objects : []
   for (const entry of objects) {
     if (!isRecord(entry)) continue
-    const index = typeof entry.arrow === 'number' ? Math.round(entry.arrow) - 1 : -1
+    const arrow = typeof entry.arrow === 'string' ? Number(entry.arrow) : entry.arrow
+    const index = typeof arrow === 'number' && Number.isFinite(arrow) ? Math.round(arrow) - 1 : -1
     const box = toArea(entry.box_2d)
     if (index < 0 || index >= arrows || !box || extents[index]) continue
     const mask = typeof entry.mask === 'string' ? toMask(entry.mask) : undefined
@@ -150,7 +186,7 @@ export function parseLocated(text: string, arrows: number): Located {
   }
   const faces = isRecord(raw) && Array.isArray(raw.faces) ? raw.faces : []
   const guarded = faces
-    .map((f) => (isRecord(f) ? toArea(f.box_2d) : null))
+    .map((f) => (Array.isArray(f) ? toArea(f) : isRecord(f) ? toArea(f.box_2d) : null))
     .filter((a): a is Area => a !== null)
     .slice(0, 12)
   return { extents, labels, guarded }
@@ -182,9 +218,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 // [ymin, xmin, ymax, xmax] on 0–1000 → fractions of the picture
 function toArea(value: unknown): Area | null {
-  if (!Array.isArray(value) || value.length !== 4 || value.some((v) => typeof v !== 'number' || !Number.isFinite(v)))
-    return null
-  const [ya, xa, yb, xb] = (value as number[]).map((v) => Math.min(1, Math.max(0, v / 1000)))
+  if (!Array.isArray(value) || value.length !== 4) return null
+  // (numbers, or numbers written as text)
+  const numbers = value.map((v) => (typeof v === 'string' && v.trim() ? Number(v) : v))
+  if (numbers.some((v) => typeof v !== 'number' || !Number.isFinite(v))) return null
+  const [ya, xa, yb, xb] = (numbers as number[]).map((v) => Math.min(1, Math.max(0, v / 1000)))
   const area = { x0: Math.min(xa, xb), y0: Math.min(ya, yb), x1: Math.max(xa, xb), y1: Math.max(ya, yb) }
   return area.x1 - area.x0 > 0.005 && area.y1 - area.y0 > 0.005 ? area : null
 }

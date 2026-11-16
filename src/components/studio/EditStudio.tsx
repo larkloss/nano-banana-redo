@@ -120,14 +120,30 @@ export function EditStudio({
   // (not all of them fit beside the picture and the arrow guide on every model)
   const referencesSent = Math.min(referenceCount, studioReferenceSlots(modelId, marks.length > 0))
   const unsentMentions = mentioned.filter((n) => !sendingReferences || n > referencesSent)
-  const wholeAlreadyTaken = session.versions.some((v) => v.derivedFrom === selected.id && !v.recut)
+  // One answer's whole picture is added once, whichever cut of it is on screen
+  const wholeAlreadyTaken = session.versions.some((v) => {
+    if (!v.derived || v.recut || !v.derivedFrom) return false
+    if (v.derivedFrom === selected.id) return true
+    const from = session.versions.find((o) => o.id === v.derivedFrom)
+    return Boolean(from?.local && selected.local && from.local.whole.blob === selected.local.whole.blob)
+  })
+  // Touching up belongs to the version it was started on: showing another
+  // one ends it (it doesn't come back, spots and all, later)
+  const [shownId, setShownId] = useState(selected.id)
+  if (shownId !== selected.id) {
+    setShownId(selected.id)
+    setTouching(null)
+    setTouchNote(null)
+  }
   const touching = touchUp && touchUp.versionId === selected.id && selected.local ? touchUp : null
   // What "find the object" saw for the edit that made this version
   const found = selectedTurn?.found
+  // (only the areas this version's cut actually went by)
+  const used = selected.local?.info.extentsUsed
   const foundBoxes: FoundBox[] = found
     ? [
         ...found.boxes.flatMap((area, i): FoundBox[] =>
-          area ? [{ area, kind: 'object', label: found.labels[i] ?? `arrow ${i + 1}` }] : [],
+          area && used?.[i] ? [{ area, kind: 'object', label: found.labels[i] ?? `arrow ${i + 1}` }] : [],
         ),
         ...found.faces.map((area): FoundBox => ({ area, kind: 'face' })),
       ]
@@ -155,11 +171,16 @@ export function EditStudio({
       // the studio and throw away what's been marked and written
       const t = e.target
       if (t instanceof HTMLTextAreaElement || t instanceof HTMLInputElement) return
+      // … and in touch-up mode it leaves that mode, not the studio
+      if (touchUp) {
+        if (!isRecutting) setTouching(null)
+        return
+      }
       onClose()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
+  }, [onClose, touchUp, isRecutting])
 
   const send = () => {
     if (!canSend) return
@@ -201,7 +222,8 @@ export function EditStudio({
         pressedBackdrop.current = e.target === e.currentTarget
       }}
       onClick={(e) => {
-        if (pressedBackdrop.current && e.target === e.currentTarget) onClose()
+        // (not while spots are picked: a stray click must not throw them away)
+        if (pressedBackdrop.current && e.target === e.currentTarget && !touching?.picked.length) onClose()
       }}
     >
       <div
@@ -262,8 +284,8 @@ export function EditStudio({
                 marks={touching ? [] : marks}
                 activeId={activeMark}
                 interactive={!comparing}
-                overlayUrl={peek === 'area' || touching ? selected.local?.areaUrl : null}
-                boxes={peek === 'area' || touching ? foundBoxes : undefined}
+                overlayUrl={peek === 'area' || (touching && !comparing) ? selected.local?.areaUrl : null}
+                boxes={peek === 'area' || (touching && !comparing) ? foundBoxes : undefined}
                 touchUp={
                   touching && selected.local && !comparing
                     ? {
@@ -271,10 +293,13 @@ export function EditStudio({
                         pending: touching.picked,
                         size: touching.size,
                         take: touching.take,
-                        onAdd: (x, y) =>
+                        onAdd: (x, y) => {
+                          // (not while the last ones are being applied)
+                          if (isRecutting) return
                           setTouching((t) =>
                             t ? { ...t, picked: [...t.picked, { x, y, r: t.size, take: t.take }] } : t,
-                          ),
+                          )
+                        },
                       }
                     : null
                 }
@@ -430,7 +455,7 @@ export function EditStudio({
                     disabled={!touchable}
                     className={`rounded-xl border px-3 py-1.5 text-xs disabled:cursor-default disabled:opacity-40 ${
                       touching
-                        ? 'border-blue-500 bg-blue-500/15 text-blue-200'
+                        ? 'border-blue-500 bg-blue-500/15 text-blue-500'
                         : 'border-zinc-700 text-zinc-300 hover:bg-zinc-800'
                     }`}
                     title="Part of the edit left behind, or something changed that shouldn’t have? Click those spots — the same answer is cut out again, without a new request"
@@ -829,7 +854,7 @@ function TurnView({
         )}
         {turn.found && (
           <p className="mt-1.5 text-[11px] text-zinc-500" title={turn.found.problem ?? undefined}>
-            {foundNote(turn)}
+            {foundNote(turn, results)}
           </p>
         )}
         {localNotes(turn, results).map((note) => (
@@ -920,21 +945,33 @@ function localNotes(turn: EditTurn, results: EditVersion[]): string[] {
   return notes
 }
 
-// What "find the object" came back with, in plain words
-function foundNote(turn: EditTurn): string {
+// What "find the object" came back with, and what was made of it, in plain words
+function foundNote(turn: EditTurn, results: EditVersion[]): string {
   const found = turn.found!
   if (found.problem) return `“Find the object” didn’t get an answer (${found.problem}) — carried on without it.`
-  const named = found.boxes
-    .map((box, i) => (box ? `${found.labels[i] ?? 'the thing'} (${i + 1})` : null))
-    .filter((v): v is string => v !== null)
-  const missing = found.boxes.map((box, i) => (box ? 0 : i + 1)).filter((n) => n > 0)
+  // An area is "used" if any result's cut went by it
+  const local = results.filter((v) => v.local)
+  const usedBy = (i: number) => local.some((v) => v.local!.info.extentsUsed?.[i])
+  const settled = local.length > 0
+  const named: string[] = []
+  const unused: number[] = []
+  const missing: number[] = []
+  found.boxes.forEach((box, i) => {
+    if (!box) missing.push(i + 1)
+    else if (!settled || usedBy(i)) named.push(`${found.labels[i] ?? 'the thing'} (${i + 1})`)
+    else unused.push(i + 1)
+  })
   const parts: string[] = []
   if (named.length > 0) parts.push(`Found: ${named.join(', ')}`)
-  if (missing.length > 0)
-    parts.push(`nothing found at ${missing.length === 1 ? 'arrow' : 'arrows'} ${listing(missing)}`)
-  if (found.faces.length > 0)
-    parts.push(`${found.faces.length} ${found.faces.length === 1 ? 'face' : 'faces'} left alone`)
-  return `${parts.join(' · ')}. Hold “what changed” to see where.`
+  if (unused.length > 0)
+    parts.push(
+      `the area found at ${unused.length === 1 ? 'arrow' : 'arrows'} ${listing(unused)} wasn’t gone by (it didn’t fit the arrow, or what it held stayed as it was)`,
+    )
+  if (missing.length > 0) parts.push(`nothing found at ${missing.length === 1 ? 'arrow' : 'arrows'} ${listing(missing)}`)
+  if (found.faces.length > 0) parts.push(`${found.faces.length} ${found.faces.length === 1 ? 'face' : 'faces'} guarded`)
+  const text = parts.join(' · ')
+  const sentence = text.charAt(0).toUpperCase() + text.slice(1)
+  return named.length > 0 || found.faces.length > 0 ? `${sentence}. Hold “what changed” to see where.` : `${sentence}.`
 }
 
 // 1 · 1 and 2 · 1, 2 and 3

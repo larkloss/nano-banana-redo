@@ -208,6 +208,8 @@ export function useEditStudio({ settings, references, onResult }: Options) {
         if (local) job = await createLocalEditor(source.image.blob, turn.marks)
         const localJob = job
         if (localJob && turn.findObject) {
+          // (stopped while the picture was being read: nothing is sent)
+          if (cancelledRef.current) throw new StoppedBeforeStart()
           const abort = new AbortController()
           locating.current = abort
           const found = await findObjects(source.image.blob, turn, abort.signal)

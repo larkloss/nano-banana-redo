@@ -98,24 +98,27 @@ const ZOOM_GAIN = 0.97 // a zoom must improve the match by this much to be used
 const SCALE_MAX = 0.08
 const AR_TOLERANCE = 0.03
 const UNRELATED = 0.85 // share of detailed areas changed: a different picture
-// An object that looks like what is behind it (an arm across a torso) changes
-// clearly only along its outline, a thin line — the kind a redraw also leaves
-// where an edge moved a little. The difference: a moved edge has its match
-// a few pixels away in the other picture, an outline that appeared or
-// disappeared has none.
+// Inside the extent of a thing (see ObjectExtent), an object that looks like
+// what is behind it (an arm across a torso) changes clearly only along its
+// outline, a thin line — the kind a redraw also leaves where an edge moved a
+// little. The difference: a moved edge has its match a few pixels away in the
+// other picture, an outline that appeared or disappeared has none.
+//
+// Outlines are only gone by inside such an extent. On their own they can't be
+// told from fine lines of a face that the model erased or shifted, and faint
+// change can't be told from a face it re-toned: followed without knowing where
+// the thing is, they take faces.
 const OUTLINE_TOLERANCE = 3 // px: no match this far around = not a moved edge
 const OUTLINE_ONE_SIDED = 0.5 // one picture's edge there is at most this × the other's
-const OUTLINE_SHARE = 0.5 // of the faint area's border that must be such an outline
-const OUTLINE_BODY = 0.5 // of the outlined object that must itself have changed
-const OUTLINE_MAX = 0.35 // of the picture: beyond this it isn't one object
-const OUTLINE_RAYS = 96 // directions looked in from the tip for an outline around it
-const OUTLINE_AROUND = 0.75 // of them that must end at an outline…
-const OUTLINE_EDGE = 0.25 // … of which this many may end at the picture's edge instead
-const OUTLINE_PARTS = 4 // an outline is a few lines, not many scattered ones
-const OUTLINE_KEPT_DETAIL = 0.03 // of what it surrounds: unchanged detail that says "still there"
 // An extent a vision model gave for the thing an arrow points at
 const EXTENT_MAX = 0.6 // of the picture: more than that is the scene, not a thing
 const EXTENT_SLACK = 0.03 // the tip may be this far outside it (models are approximate)
+// What an extent would take is "still there" — re-toned, not replaced — when
+// the original's detail in it came through with its strength: then the extent
+// has taken in something else (a face no box was given for), and isn't used
+const STILL_DETAIL = 0.02 // of the area: detail there has to be, to judge by
+const STILL_KEPT = 0.47 // of that detail that kept its strength (re-toned faces: 0.5 and up; things: under 0.45)
+const STILL_MATCH = 0.35 // "kept": within this share of the original edge strength
 const WIDESPREAD = 0.02 // share of the picture clearly changed away from the edit
 
 export interface LocalEditInfo {
@@ -128,6 +131,10 @@ export interface LocalEditInfo {
   // The model also clearly changed things away from the arrows (a new
   // lighting, a restyle): only the part around the arrows was kept
   widespread: boolean
+  // Per arrow, when extents were given: was the arrow's extent gone by?
+  // (false: none given, it didn't hold the tip, it was the whole scene, or
+  // what it held was still there)
+  extentsUsed?: boolean[]
 }
 
 // Detection numbers per arrow, for tuning and diagnostics
@@ -143,12 +150,9 @@ export interface ArrowStats {
   near: number
   peak: number
   changed: boolean
-  // share of the changed area around the tip that an outline borders
-  // (negative: no such area to speak of)
-  outline?: number
-  // share of the directions from the tip in which an outline is met
-  // (negative: met, but not as one outline)
-  around?: number
+  // With an extent: [share of what it would take that is detail of the
+  // original, share of that detail that kept its strength] — see STILL_*
+  still?: [number, number]
 }
 let lastStats: ArrowStats[] = []
 let lastDebug: {
@@ -444,9 +448,10 @@ export async function composeLocalEdit(
       const outC = resampleMask(found.keepOut, w, h, cx0 * sx, cy0 * sy, cropW * sx, cropH * sy, cw, ch)
       for (let p = 0; p < nc; p++) if (outC[p]) pockets[p] = 1
     }
-    // … and where the user put the original back, nothing is taken at all
-    const backC = hints.restored
-      ? resampleMask(hints.restored, w, h, cx0 * sx, cy0 * sy, cropW * sx, cropH * sy, cw, ch)
+    // … and in guarded areas and where the user put the original back,
+    // nothing is taken at all
+    const backC = found.forbidden
+      ? resampleMask(found.forbidden, w, h, cx0 * sx, cy0 * sy, cropW * sx, cropH * sy, cw, ch)
       : null
     for (let p = 0; p < nc; p++) {
       if (!resC.valid[p] || !origC.valid[p] || (backC && backC[p])) {
@@ -504,6 +509,7 @@ export async function composeLocalEdit(
       coverage: takenFull / (W * H),
       reachedLimit: found.reachedLimit,
       widespread: found.awayShare > WIDESPREAD,
+      ...(options.extents ? { extentsUsed: found.extentsUsed } : {}),
     },
   }
 }
@@ -666,6 +672,9 @@ interface Detection {
   grown: Uint8Array
   // Parts that changed only as the model's drift: kept from the original
   keepOut?: Uint8Array | null
+  // Where nothing may be taken at all (guarded areas, spots put back)
+  forbidden?: Uint8Array | null
+  extentsUsed?: boolean[]
   reachedLimit: boolean
   // share of the picture clearly changed away from the edit
   awayShare: number
@@ -726,30 +735,24 @@ function detectChange(
   // hair, a cable — can be the edit); closing joins the fragments of one
   // changed object.
   const opened = open(strong, w, h, 1)
-  // Lines of clear change (anything narrower than an object's fragments are
-  // joined across) that are outlines existing in one picture only
-  // — an edge that only one of the two pictures has (a recoloured strand is
-  // an edge in both), away from the solid changes (whose rims are thin too)
-  const bulk = open(strong, w, h, Math.max(2, closeR))
-  const nearBulk = dilate(bulk, w, h, closeR + 1)
-  const answerGrad = gradientMagnitude(answerDet[0], w, h)
+  // Thin lines of clear change that are outlines existing in one picture only
+  // (an edge only one of the two has; a recoloured strand is an edge in
+  // both), away from the solid changes, whose rims are thin too. Only looked
+  // for when the extent of a thing is known.
   const outline = new Uint8Array(n)
-  for (let p = 0; p < n; p++) {
-    if (!strong[p] || bulk[p] || nearBulk[p]) continue
-    if (!oneSidedEdge(grad, answerGrad, w, h, p, 2)) continue
-    if (unmatchedAround(job.origDet, answerDet, w, h, p, OUTLINE_TOLERANCE) > high[p]) outline[p] = 1
+  const answerGrad = hints.extents.some(Boolean) ? gradientMagnitude(answerDet[0], w, h) : null
+  if (answerGrad) {
+    const bulk = open(strong, w, h, Math.max(2, closeR))
+    const nearBulk = dilate(bulk, w, h, closeR + 1)
+    for (let p = 0; p < n; p++) {
+      if (!strong[p] || bulk[p] || nearBulk[p]) continue
+      if (!oneSidedEdge(grad, answerGrad, w, h, p, 2)) continue
+      if (unmatchedAround(job.origDet, answerDet, w, h, p, OUTLINE_TOLERANCE) > high[p]) outline[p] = 1
+    }
   }
-  const wall = dilate(outline, w, h, 1)
-  // Detail of the original that the answer kept as it was
-  const detailLevel = Math.max(4, quantile(sampleEvery(grad, valid, 7), 0.7))
-  const keptDetail = new Uint8Array(n)
-  for (let p = 0; p < n; p++) keptDetail[p] = valid[p] && !weak[p] && grad[p] >= detailLevel ? 1 : 0
-  // (pieces of one broken line count as that line)
-  const wallLabels = labelComponents(dilate(wall, w, h, closeR), w, h).labels
-  // Faint change, and clear change too slight to be a solid part
-  const passable = new Uint8Array(n)
-  for (let p = 0; p < n; p++) passable[p] = valid[p] && (weak[p] || strong[p]) && !wall[p] && !bulk[p] ? 1 : 0
+  // What is taken because it lies in a thing's extent
   const outlined = new Uint8Array(n)
+  const extentsUsed = marks.map(() => false)
   const objects = opened.slice()
   for (let p = 0; p < n; p++) if (strong[p] && coreMask[p]) objects[p] = 1
   const joined = erode(dilate(objects, w, h, closeR), w, h, closeR)
@@ -790,22 +793,17 @@ function detectChange(
     const seeded =
       keptMass >= SEED_FLOOR && (keptPeak >= SEED_PEAK || keptMass >= SEED_PLENTY * Math.PI * core * core)
     if (seeded) kept.forEach((l) => keep.add(l))
-    // The tip may sit inside an object whose change is faint except for its
-    // outline: that whole object is the edit
-    const object = outlinedObject(cx, cy, core / 2, passable, wall, bulk, valid, w, h, closeR)
-    if (object.mask) for (let p = 0; p < n; p++) if (object.mask[p]) outlined[p] = 1
-    // … or inside an outline that goes all the way around it, whatever the
-    // inside did (the same skin behind an arm as on it): the outline, with
-    // what changed inside it
-    const ring = surroundingOutline(cx, cy, wall, wallLabels, passable, keptDetail, valid, w, h, WEAK_REACH * closeR)
-    if (ring.mask) for (let p = 0; p < n; p++) if (ring.mask[p]) outlined[p] = 1
-    // … or in a thing a vision model has found the extent of: what changed
-    // there, however faintly, in one piece with the tip
-    const within = hints.extents[i]
-      ? changedWithin(cx, cy, core, hints.extents[i]!, weak, strong, valid, hints.guarded, w, h, closeR)
-      : null
-    if (within) for (let p = 0; p < n; p++) if (within[p]) outlined[p] = 1
-    const changed = seeded || object.mask !== null || ring.mask !== null || within !== null
+    // The tip may sit in a thing a vision model has found the extent of:
+    // what changed there, however faintly, in one piece with the tip
+    const within =
+      hints.extents[i] && answerGrad
+        ? changedWithin(cx, cy, core, hints.extents[i]!, weak, strong, outline, grad, answerGrad, valid, hints.guarded, w, h, closeR)
+        : null
+    if (within?.piece) {
+      extentsUsed[i] = true
+      for (let p = 0; p < n; p++) if (within.piece[p]) outlined[p] = 1
+    }
+    const changed = seeded || Boolean(within?.piece)
     arrowsChanged.push(changed)
     const tx = Math.min(w - 1, Math.max(0, Math.round(cx)))
     const ty = Math.min(h - 1, Math.max(0, Math.round(cy)))
@@ -817,14 +815,13 @@ function detectChange(
       near: first >= 0 ? near.get(first)! : -1,
       peak: keptPeak,
       changed,
-      outline: object.share,
-      around: ring.around,
+      ...(within ? { still: within.still } : {}),
     })
   })
   if (!arrowsChanged.some(Boolean)) {
     const grown = new Uint8Array(n)
     if (hints.taken) for (let p = 0; p < n; p++) if (hints.taken[p] && valid[p] && !hints.restored?.[p]) grown[p] = 1
-    return { arrowsChanged, grown, reachedLimit: false, awayShare: 0, stats }
+    return { arrowsChanged, grown, forbidden: hints.restored, reachedLimit: false, awayShare: 0, stats, extentsUsed }
   }
 
   // The edit: those objects, followed as far as the change stays clear
@@ -839,8 +836,11 @@ function detectChange(
     if (strong[p] && coreMask[p]) seeds[p] = 1
   }
   const edit = growFrom(seeds, allowed, w, h)
-  if (hints.guarded) for (let p = 0; p < n; p++) if (hints.guarded[p]) outlined[p] = 0
-  for (let p = 0; p < n; p++) if (outlined[p]) edit[p] = 1
+  // Guarded areas (faces) keep the original — all but the object an arrow's
+  // own clear change belongs to (a fringe that hangs into the face's box)
+  const barred = new Uint8Array(n)
+  if (hints.guarded) for (let p = 0; p < n; p++) if (hints.guarded[p] && !edit[p]) barred[p] = 1
+  for (let p = 0; p < n; p++) if (outlined[p] && !barred[p]) edit[p] = 1
   const firstEdit = edit.slice()
 
   // The rest of the same object, where its change is interrupted for a
@@ -870,7 +870,7 @@ function detectChange(
     }
     if (joins.size === 0) break
     joins.forEach((l) => keep.add(l))
-    for (let p = 0; p < n; p++) if (labels[p] && joins.has(labels[p]) && farMask[p]) edit[p] = 1
+    for (let p = 0; p < n; p++) if (labels[p] && joins.has(labels[p]) && farMask[p] && !barred[p]) edit[p] = 1
   }
 
   // Plus faint change right at its edges (soft shadows, anti-aliasing, the
@@ -892,22 +892,32 @@ function detectChange(
     forDisc(mark.x * w, mark.y * h, core, w, h, (p, d2) => {
       if (seeds[p]) nearest = Math.min(nearest, d2)
     })
+    // (an arrow gone by its extent alone has no clear change at its tip)
+    if (nearest === Infinity) return
     const r = Math.sqrt(nearest) + touch
     forDisc(mark.x * w, mark.y * h, r, w, h, (p) => {
       if (seeds[p]) atTips[p] = 1
     })
   })
-  // (an outlined object is one thing, however evenly its inside changed)
-  const rest = grown.slice()
-  for (let p = 0; p < n; p++) if (outlined[p]) rest[p] = 0
-  const drift = toneDrift(rest, atTips, job.origDet, answerDet, valid, w, h)
+  // (what lies in a thing's extent is that thing, however evenly it changed)
+  const drift = toneDrift(grown, atTips, job.origDet, answerDet, valid, w, h)
   if (drift) for (let p = 0; p < n; p++) if (drift[p] && !outlined[p]) grown[p] = 0
   // Specks inside the change belong to it; anything bigger it surrounds
   // (a face inside a recoloured hood) does not
   fillSmallHoles(grown, w, h, Math.PI * closeR * closeR)
+  // Nothing of it in guarded areas, whichever step reached into them
+  for (let p = 0; p < n; p++) if (barred[p]) grown[p] = 0
   // The user's own touch-ups have the last word
   if (hints.taken) for (let p = 0; p < n; p++) if (hints.taken[p] && valid[p]) grown[p] = 1
   if (hints.restored) for (let p = 0; p < n; p++) if (hints.restored[p]) grown[p] = 0
+  // Where nothing may be taken at all, not even by the seam or the blend:
+  // guarded areas (unless the user's touch-up took a spot there) and spots
+  // the user put back
+  let forbidden: Uint8Array | null = null
+  if (hints.guarded || hints.restored) {
+    forbidden = new Uint8Array(n)
+    for (let p = 0; p < n; p++) forbidden[p] = (barred[p] && !hints.taken?.[p]) || hints.restored?.[p] ? 1 : 0
+  }
   const reachedLimit = touchesReachEdge(grown, marks, arrowsChanged, w, h, farReach)
 
   // Clear change the model made elsewhere
@@ -923,9 +933,11 @@ function detectChange(
     arrowsChanged,
     grown,
     keepOut: drift,
+    forbidden,
     reachedLimit,
     awayShare: total > 0 ? away / total : 0,
     stats,
+    extentsUsed,
     maps: { strong, weak, joined, first: firstEdit, outline, outlined },
   }
 }
@@ -950,11 +962,14 @@ async function readHints(job: LocalEditJob, options: LocalEditOptions): Promise<
     y1: Math.min(h, Math.ceil(Math.max(a.y0, a.y1) * h)),
   })
 
-  // A guarded area an arrow points into is being edited, not guarded
+  // Guarded areas. (An arrow pointing into one still edits what it points
+  // at: the object its own clear change belongs to is not barred — see
+  // detectChange.)
   let guarded: Uint8Array | null = null
   for (const area of options.guarded ?? []) {
+    if (!area) continue
     const r = rect(area)
-    if (tips.some((t) => t.x >= r.x0 && t.x < r.x1 && t.y >= r.y0 && t.y < r.y1)) continue
+    if (!(r.x1 > r.x0 && r.y1 > r.y0)) continue
     guarded = guarded ?? new Uint8Array(n)
     for (let y = r.y0; y < r.y1; y++) guarded.fill(1, y * w + r.x0, y * w + r.x1)
   }
@@ -963,7 +978,7 @@ async function readHints(job: LocalEditJob, options: LocalEditOptions): Promise<
   for (let i = 0; i < marks.length; i++) {
     const extent = options.extents?.[i]
     extents.push(null)
-    if (!extent) continue
+    if (!extent || !extent.box) continue
     const r = rect(extent.box)
     const bw = r.x1 - r.x0
     const bh = r.y1 - r.y0
@@ -1003,6 +1018,7 @@ async function readHints(job: LocalEditJob, options: LocalEditOptions): Promise<
   let taken: Uint8Array | null = null
   let restored: Uint8Array | null = null
   for (const touch of options.touches ?? []) {
+    if (!touch) continue
     const disc = new Uint8Array(n)
     paintDisc(disc, w, h, touch.x * w, touch.y * h, Math.max(1, touch.r * unit))
     taken = taken ?? new Uint8Array(n)
@@ -1017,13 +1033,15 @@ async function readHints(job: LocalEditJob, options: LocalEditOptions): Promise<
   if (taken && !taken.some((v) => v === 1)) taken = null
   if (restored && !restored.some((v) => v === 1)) restored = null
   // (to the very edge of the spot as the user saw it, whatever the rounding)
-  if (restored) restored = dilate(restored, w, h, 1)
+  if (restored) restored = dilate(restored, w, h, 2)
   return { extents, guarded, taken, restored }
 }
 
 // Within the extent of the thing a tip points at: everything that changed,
-// faint or clear, that is in one piece with the tip (fragments joined as
-// usual); nothing in guarded areas. Null if nothing to speak of changed there.
+// faint or clear (thin outlines included), that is in one piece with the tip
+// (fragments joined as usual); nothing in guarded areas. Null if nothing to
+// speak of changed there — or if what did is still there, only re-toned: then
+// the extent has taken in something that isn't the thing.
 function changedWithin(
   cx: number,
   cy: number,
@@ -1031,17 +1049,24 @@ function changedWithin(
   extent: Uint8Array,
   weak: Uint8Array,
   strong: Uint8Array,
+  outline: Uint8Array,
+  grad: Float32Array,
+  answerGrad: Float32Array,
   valid: Uint8Array,
   guarded: Uint8Array | null,
   w: number,
   h: number,
   closeR: number,
-): Uint8Array | null {
+): { piece: Uint8Array | null; still: [number, number] } {
   const n = w * h
+  const inside = (p: number) => extent[p] && valid[p] && !guarded?.[p]
   const changed = new Uint8Array(n)
-  for (let p = 0; p < n; p++) changed[p] = extent[p] && valid[p] && (weak[p] || strong[p]) && !guarded?.[p] ? 1 : 0
-  const joined = erode(dilate(open(changed, w, h, 1), w, h, closeR), w, h, closeR)
-  for (let p = 0; p < n; p++) if (!extent[p] || !valid[p] || guarded?.[p]) joined[p] = 0
+  for (let p = 0; p < n; p++) changed[p] = inside(p) && (weak[p] || strong[p]) ? 1 : 0
+  // without specks — but with the outlines, thin as they are
+  const solid = open(changed, w, h, 1)
+  for (let p = 0; p < n; p++) if (outline[p] && inside(p)) solid[p] = 1
+  const joined = erode(dilate(solid, w, h, closeR), w, h, closeR)
+  for (let p = 0; p < n; p++) if (!inside(p)) joined[p] = 0
   const start = new Uint8Array(n)
   let any = false
   forDisc(cx, cy, core, w, h, (p) => {
@@ -1050,15 +1075,40 @@ function changedWithin(
       any = true
     }
   })
-  if (!any) return null
+  // Nothing changed at the tip itself (a thing that differs from what is
+  // behind it by its outline alone): then from its outline, wherever in the
+  // extent that is
+  if (!any) {
+    for (let p = 0; p < n; p++) {
+      if (outline[p] && joined[p]) {
+        start[p] = 1
+        any = true
+      }
+    }
+  }
+  if (!any) return { piece: null, still: [0, 0] }
   const piece = growFrom(start, joined, w, h)
   let area = 0
-  for (let p = 0; p < n; p++) if (piece[p]) area++
-  if (area < SEED_FLOOR) return null
+  let detail = 0
+  let kept = 0
+  const level = Math.max(4, quantile(sampleEvery(grad, valid, 7), 0.7))
+  for (let p = 0; p < n; p++) {
+    if (!piece[p]) continue
+    area++
+    // Detail of the original where the change is faint, that is neither gone
+    // nor new: an edge of the same strength in the answer (a re-tone leaves
+    // edges as they are)
+    if (grad[p] < level || strong[p] || !weak[p]) continue
+    detail++
+    if (Math.abs(answerGrad[p] - grad[p]) <= STILL_MATCH * grad[p]) kept++
+  }
+  const still: [number, number] = [detail / Math.max(1, area), kept / Math.max(1, detail)]
+  if (area < SEED_FLOOR) return { piece: null, still }
+  if (detail >= STILL_DETAIL * area && kept >= STILL_KEPT * detail) return { piece: null, still }
   // Specks it encloses are part of it; anything bigger it surrounds is not
   fillSmallHoles(piece, w, h, Math.PI * closeR * closeR)
-  for (let p = 0; p < n; p++) if (!extent[p] || !valid[p] || guarded?.[p]) piece[p] = 0
-  return piece
+  for (let p = 0; p < n; p++) if (!inside(p)) piece[p] = 0
+  return { piece, still }
 }
 
 // An edge here in one picture and next to none in the other
@@ -1111,189 +1161,6 @@ function unmatchedAround(
     }
   }
   return Math.sqrt(Math.max(missingInAnswer, missingInOrig))
-}
-
-// The changed area the tip sits in, if it is one outlined object: followed
-// through faint change from the tip without crossing an outline, it has to
-// end at outlines along most of its border (faint change that just fades
-// out is the redraw's drift), and be mostly changed inside.
-function outlinedObject(
-  cx: number,
-  cy: number,
-  startRadius: number,
-  passable: Uint8Array,
-  wall: Uint8Array,
-  bulk: Uint8Array,
-  valid: Uint8Array,
-  w: number,
-  h: number,
-  closeR: number,
-): { mask: Uint8Array | null; share: number } {
-  const n = w * h
-  const start = new Uint8Array(n)
-  let any = false
-  forDisc(cx, cy, Math.max(2, startRadius), w, h, (p) => {
-    if (passable[p]) {
-      start[p] = 1
-      any = true
-    }
-  })
-  if (!any) return { mask: null, share: -1 }
-  const body = growFrom(start, passable, w, h)
-  let bodyArea = 0
-  for (let p = 0; p < n; p++) if (body[p]) bodyArea++
-  if (bodyArea < 40 || bodyArea > OUTLINE_MAX * n) return { mask: null, share: -2 }
-
-  // With the outline it reaches, and what the two enclose
-  const reach = dilate(body, w, h, 1)
-  const shape = new Uint8Array(n)
-  for (let p = 0; p < n; p++) shape[p] = body[p] || (reach[p] && wall[p]) ? 1 : 0
-  const holes = enclosedHoles(shape, w, h)
-  let area = 0
-  for (let p = 0; p < n; p++) {
-    if (holes[p] && valid[p]) shape[p] = 1
-    if (shape[p]) area++
-  }
-  if (area > OUTLINE_MAX * n || bodyArea < OUTLINE_BODY * area) return { mask: null, share: -3 }
-
-  // Its border: an outline (give or take the faint fringe a soft shadow or
-  // anti-aliasing leaves beyond one), or faint change fading out?
-  const toWall = distanceToSet(wall, w, h)
-  const fringe = WEAK_REACH * closeR
-  let onOutline = 0
-  let fading = 0
-  for (let p = 0; p < n; p++) {
-    if (!shape[p]) continue
-    const x = p % w
-    const y = (p - x) / w
-    let open = false
-    let solid = false
-    for (const q of [x > 0 ? p - 1 : -1, x < w - 1 ? p + 1 : -1, y > 0 ? p - w : -1, y < h - 1 ? p + w : -1]) {
-      if (q < 0 || shape[q] || !valid[q]) continue
-      open = true
-      if (bulk[q]) solid = true
-    }
-    if (!open) continue
-    // (where it runs into a solid change it is that change's surroundings)
-    if (!solid && toWall[p] <= fringe) onOutline++
-    else fading++
-  }
-  const share = onOutline / Math.max(1, onOutline + fading)
-  if (share < OUTLINE_SHARE) return { mask: null, share }
-
-  // The whole outline, not just its inner edge
-  const around = dilate(shape, w, h, 2)
-  for (let p = 0; p < n; p++) if (around[p] && wall[p] && valid[p]) shape[p] = 1
-  const closed = erode(dilate(shape, w, h, closeR), w, h, closeR)
-  for (let p = 0; p < n; p++) if (!valid[p]) closed[p] = 0
-  return { mask: closed, share }
-}
-
-// An outline all around the tip: looking out from the tip in every
-// direction, nearly all of them end at one of a few outline lines (or leave
-// the picture). Returns those lines and what belongs with them inside.
-function surroundingOutline(
-  cx: number,
-  cy: number,
-  wall: Uint8Array,
-  labels: Int32Array,
-  changed: Uint8Array,
-  keptDetail: Uint8Array,
-  valid: Uint8Array,
-  w: number,
-  h: number,
-  margin: number,
-): { mask: Uint8Array | null; around: number } {
-  const n = w * h
-  const K = OUTLINE_RAYS
-  const maxR = Math.sqrt(OUTLINE_MAX * n)
-  const hitR = new Float32Array(K).fill(-1)
-  const edgeR = new Float32Array(K).fill(Infinity)
-  const count = new Map<number, number>()
-  let atWall = 0
-  let atEdge = 0
-  for (let k = 0; k < K; k++) {
-    const a = (2 * Math.PI * k) / K
-    const ux = Math.cos(a)
-    const uy = Math.sin(a)
-    let left = false // a tip on a line first has to leave it
-    for (let r = 0; r <= maxR; r++) {
-      const x = Math.round(cx + ux * r)
-      const y = Math.round(cy + uy * r)
-      if (x < 0 || y < 0 || x >= w || y >= h || !valid[y * w + x]) {
-        edgeR[k] = r
-        atEdge++
-        break
-      }
-      const p = y * w + x
-      if (!wall[p]) left = true
-      else if (left) {
-        hitR[k] = r
-        count.set(labels[p], (count.get(labels[p]) ?? 0) + 1)
-        atWall++
-        break
-      }
-    }
-  }
-  const around = (atWall + Math.min(atEdge, OUTLINE_EDGE * K)) / K
-  if (around < OUTLINE_AROUND || atWall < 0.5 * K) return { mask: null, around }
-  const parts = [...count.entries()].sort((a, b) => b[1] - a[1]).slice(0, OUTLINE_PARTS)
-  const inParts = parts.reduce((acc, [, c]) => acc + c, 0)
-  if (inParts < 0.85 * atWall) return { mask: null, around: -around }
-  const lines = new Set(parts.map(([l]) => l))
-
-  // Directions in which no outline was met take their neighbours' distance
-  // (the picture's edge, if that comes first)
-  for (let pass = 0; pass < K; pass++) {
-    let open = false
-    for (let k = 0; k < K; k++) {
-      if (hitR[k] >= 0) continue
-      const before = hitR[(k + K - 1) % K]
-      const after = hitR[(k + 1) % K]
-      if (before >= 0 || after >= 0) hitR[k] = before >= 0 && after >= 0 ? Math.min(before, after) : Math.max(before, after)
-      else open = true
-    }
-    if (!open) break
-  }
-  for (let k = 0; k < K; k++) hitR[k] = Math.min(hitR[k], edgeR[k])
-  let area = 0
-  for (let k = 0; k < K; k++) area += (Math.PI / K) * hitR[k] * hitR[k]
-  if (area > OUTLINE_MAX * n || area < 40) return { mask: null, around: -around }
-
-  const mask = new Uint8Array(n)
-  const inView: number[] = []
-  let moved = 0
-  let kept = 0
-  const x0 = Math.max(0, Math.floor(cx - maxR - margin))
-  const x1 = Math.min(w - 1, Math.ceil(cx + maxR + margin))
-  const y0 = Math.max(0, Math.floor(cy - maxR - margin))
-  const y1 = Math.min(h - 1, Math.ceil(cy + maxR + margin))
-  for (let y = y0; y <= y1; y++) {
-    for (let x = x0; x <= x1; x++) {
-      const p = y * w + x
-      if (!valid[p]) continue
-      const dx = x - cx
-      const dy = y - cy
-      const r = Math.hypot(dx, dy)
-      let k = Math.round((Math.atan2(dy, dx) / (2 * Math.PI)) * K)
-      k = ((k % K) + K) % K
-      if (r <= hitR[k]) {
-        if (wall[p]) mask[p] = 1
-        else {
-          inView.push(p)
-          if (changed[p]) moved++
-          if (keptDetail[p]) kept++
-        }
-      } else if (r <= hitR[k] + margin && wall[p] && lines.has(labels[p])) mask[p] = 1
-    }
-  }
-  // What's inside it: all of it if most of it changed. Otherwise what did
-  // change — unless detail in there came through unchanged: then what the
-  // outline surrounded is still there (the eyes behind removed glasses), and
-  // only the outline goes.
-  if (moved >= OUTLINE_BODY * inView.length) for (const p of inView) mask[p] = 1
-  else if (kept < OUTLINE_KEPT_DETAIL * inView.length) for (const p of inView) if (changed[p]) mask[p] = 1
-  return { mask, around }
 }
 
 // Inside a connected change, a second, clearly different kind of change: a

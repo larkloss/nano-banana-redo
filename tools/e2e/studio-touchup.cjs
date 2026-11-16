@@ -162,19 +162,25 @@ async function disturbed(p, before, after, discs) {
     await p.close()
   }
 
-  // ---- 2. Find the object: a hairline outline is not enough without it
+  // ---- 2. Find the object: a thing that looks like what is behind it is only
+  // taken as far as its clear change goes without it
   const kase = 'S-arm-thin-line__mild', m = meta(kase)
+  // where the thing is, as Gemini would say it: [ymin, xmin, ymax, xmax] on 0-1000
+  const where = meta('S-arm-thin-line-found__mild').options.extents[0].box
+  const box2d = [where.y0, where.x0, where.y1, where.x1].map((v) => Math.round(v * 1000))
+  let partial = 0
   {
     const { p, calls, errors } = await open(browser, kase)
     const txt = await arrowAndApply(p, m.marks[0])
-    check('without "find the object" the answers are not usable', /Gave up/.test(txt), (txt.match(/Gave up[^\n]*/) || [''])[0].slice(0, 80))
-    check('no locator request when the switch is off', calls.locate === 0)
+    partial = (await diff(p, 'Original', 'Version 1')).changedPct
+    check('without "find the object" only part of the thing is taken', /Done/.test(txt) && partial < 3, partial + '% of the picture')
+    check('no locator request when the switch is off', calls.locate === 0 && calls.locateOld === 0)
     check('no page errors', errors.length === 0, errors.join(' | '))
     await p.close()
   }
   {
     // the box of the limb (from the ground truth), as Gemini would give it: [ymin,xmin,ymax,xmax] 0-1000
-    const located = JSON.stringify({ objects: [{ arrow: 1, label: 'left arm', box_2d: [390, 190, 1000, 520] }], faces: [{ box_2d: [110, 340, 360, 540] }] })
+    const located = JSON.stringify({ objects: [{ arrow: 1, label: 'left arm', box_2d: box2d }], faces: [{ box_2d: [110, 340, 360, 540] }] })
     const { p, calls, errors } = await open(browser, kase, { locator: '```json\n' + located + '\n```' })
     await clickAt(p, m.marks[0].x, m.marks[0].y)
     await p.keyboard.type('remove this')
@@ -190,16 +196,32 @@ async function disturbed(p, before, after, discs) {
     const sent = calls.locateBodies[0] || {}
     check('one locator request (Interactions API), with two pictures and the instruction', calls.locate === 1 && calls.locateOld === 0 && sent.model === 'gemini-4-hydrogen' && sent.input.filter((x) => x.type === 'image').length === 2 && /remove this/.test(JSON.stringify(sent.input)), `calls ${calls.locate}+${calls.locateOld}, model ${sent.model}`)
     check('the default model is left at its own thinking level', sent.generation_config === undefined)
-    check('the note says what was found', /Found: left arm \(1\) · 1 face left alone/.test(txt), (txt.match(/Found:[^\n]*/) || ['(none)'])[0])
+    check('the pictures are not stored on Google’s side', sent.store === false)
+    check('the note says what was found', /Found: left arm \(1\) · 1 face guarded/.test(txt), (txt.match(/Found:[^\n]*/) || ['(none)'])[0])
     const d = await diff(p, 'Original', 'Version 1')
-    check('a large part of the limb was taken', d.changedPct > 5, d.changedPct + '% of the picture')
+    check('all of the thing is taken', d.changedPct > 4 && d.changedPct > 1.5 * partial, `${d.changedPct}% of the picture (${partial}% without)`)
+    // the guarded face: [110,340,360,540] on 0-1000 of a 1024 px picture
+    const face = await p.evaluate(async () => {
+      const imgs = [...document.querySelectorAll('[role=dialog] section img')]
+      const load = async (alt) => createImageBitmap(await (await fetch(imgs.find((i) => i.alt === alt).src)).blob())
+      const [A, C] = [await load('Original'), await load('Version 1')]
+      const px = (bm) => { const cv = new OffscreenCanvas(bm.width, bm.height); const x = cv.getContext('2d'); x.drawImage(bm, 0, 0); return x.getImageData(0, 0, bm.width, bm.height).data }
+      const pa = px(A), pc = px(C), W = A.width, H = A.height
+      let changed = 0
+      for (let y = Math.round(0.11 * H); y < Math.round(0.36 * H); y++) for (let x = Math.round(0.34 * W); x < Math.round(0.54 * W); x++) {
+        const i = (y * W + x) * 4
+        if (pa[i] !== pc[i] || pa[i + 1] !== pc[i + 1] || pa[i + 2] !== pc[i + 2]) changed++
+      }
+      return changed
+    })
+    check('the guarded face is the original, pixel for pixel', face === 0, face + ' px changed')
     // hold "what changed": boxes are drawn
     const btn = p.locator('[role=dialog] button:has-text("Hold: what changed")'); const bb = await btn.boundingBox()
     await p.mouse.move(bb.x + bb.width / 2, bb.y + bb.height / 2); await p.mouse.down()
     const labels = await p.evaluate(() => [...document.querySelectorAll('[role=dialog] svg[aria-hidden] text')].map((t) => t.textContent))
     await shot(p, '4-found-boxes.png')
     await p.mouse.up()
-    check('the found boxes are shown', labels.includes('left arm') && labels.includes('face — kept'), JSON.stringify(labels))
+    check('the found boxes are shown', labels.includes('left arm') && labels.includes('face — guarded'), JSON.stringify(labels))
     const stored = await p.evaluate(() => localStorage.getItem('nbr.studio.v1'))
     check('the switch is remembered', /"findObject":true/.test(stored || ''), stored)
     check('no page errors', errors.length === 0, errors.join(' | '))
@@ -207,7 +229,7 @@ async function disturbed(p, before, after, discs) {
   }
   {
     // a model only served the older way, and a model id typed by the user
-    const located = JSON.stringify({ objects: [{ arrow: 1, label: 'arm', box_2d: [390, 190, 1000, 520] }], faces: [] })
+    const located = JSON.stringify({ objects: [{ arrow: 1, label: 'arm', box_2d: box2d }], faces: [] })
     const { p, calls, errors } = await open(browser, kase, { locator: 'Here you go: ' + located, oldWayOnly: true })
     await clickAt(p, m.marks[0].x, m.marks[0].y)
     await p.keyboard.type('remove this')
@@ -222,7 +244,22 @@ async function disturbed(p, before, after, discs) {
     await p.close()
   }
   {
-    // the locator fails: the edit goes on as it would without (here: not usable), with a note
+    // an answer that doesn't say where the faces are is not gone by
+    const located = JSON.stringify({ objects: [{ arrow: 1, label: 'arm', box_2d: box2d }] })
+    const { p, errors } = await open(browser, kase, { locator: located })
+    await clickAt(p, m.marks[0].x, m.marks[0].y)
+    await p.keyboard.type('remove this')
+    await p.locator('[role=dialog] label:has-text("find the object") input').check()
+    await p.click('[role=dialog] button:has-text("Apply edit")')
+    await p.waitForFunction(() => /Done in|Done on|Gave up|went wrong|Stopped/.test(document.querySelector('[role=dialog]').innerText), null, { timeout: 120000 })
+    const txt = await p.evaluate(() => document.querySelector('[role=dialog]').innerText)
+    const same = (await diff(p, 'Original', 'Version 1')).changedPct
+    check('an answer without a list of faces is not gone by', same === partial && /didn’t say where the faces are/.test(txt), `${same}% vs ${partial}%; ${(txt.match(/“Find the object”[^\n]*/) || ['(no note)'])[0].slice(0, 90)}`)
+    check('no page errors', errors.length === 0, errors.join(' | '))
+    await p.close()
+  }
+  {
+    // the locator fails: the edit goes on as it would without, with a note
     const { p, calls, errors } = await open(browser, kase, { locator: 'error' })
     await clickAt(p, m.marks[0].x, m.marks[0].y)
     await p.keyboard.type('remove this')
@@ -230,7 +267,8 @@ async function disturbed(p, before, after, discs) {
     await p.click('[role=dialog] button:has-text("Apply edit")')
     await p.waitForFunction(() => /Done in|Done on|Gave up|went wrong|Stopped/.test(document.querySelector('[role=dialog]').innerText), null, { timeout: 120000 })
     const txt = await p.evaluate(() => document.querySelector('[role=dialog]').innerText)
-    check('a failed locator does not fail the edit by itself, and says why', /Gave up/.test(txt) && /didn’t get an answer \(backend unavailable\)/.test(txt), (txt.match(/“Find the object”[^\n]*/) || ['(no note)'])[0].slice(0, 110))
+    const same = (await diff(p, 'Original', 'Version 1')).changedPct
+    check('a failed locator leaves the edit as it is without it, and says why', /Done/.test(txt) && same === partial && /didn’t get an answer \(backend unavailable\)/.test(txt), (txt.match(/“Find the object”[^\n]*/) || ['(no note)'])[0].slice(0, 110))
     console.log('     locator calls:', calls.locate, '+', calls.locateOld, '| image calls:', calls.image, '| errors:', errors.filter((e) => !/500/.test(e)))
     await p.close()
   }

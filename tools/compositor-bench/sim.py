@@ -195,15 +195,17 @@ def smooth_photo(img, sigma, seed):
     return np.clip(sm + rng.normal(0, 1.5, sm.shape), 0, 255).astype(np.float32)
 
 
-def add_limb(base, m, lift, shade, contour, width):
-    """A limb-like object made of what is under it (an arm across a torso): the same
-    material, `lift` levels brighter, shaded like a rounded form, with a dark contour
-    `width` px wide and a soft drop shadow. Inside, old and new look alike; what differs
+def add_limb(base, m, lift, shade, contour, width, shift=(0, 0)):
+    """A limb-like object of the same material as what it lies on (an arm across a
+    torso): the picture's own content from `shift` px away (so it hides what is under
+    it), `lift` levels brighter, shaded like a rounded form, with a dark contour `width`
+    px wide and a soft drop shadow. Inside, old and new look alike; what differs
     clearly is the outline. Returns the picture with it and where it is."""
     soft = ndimage.gaussian_filter(m.astype(np.float32), 1.0)
     depth = ndimage.distance_transform_edt(m)
     depth = depth / max(1.0, depth.max())
-    obj = np.clip(base * (1 - shade + 2 * shade * np.sqrt(depth))[..., None] + lift, 0, 255)
+    material = np.roll(np.roll(base, int(shift[1]), 0), int(shift[0]), 1)
+    obj = np.clip(material * (1 - shade + 2 * shade * np.sqrt(depth))[..., None] + lift, 0, 255)
     rim = ndimage.gaussian_filter((m ^ ndimage.binary_erosion(m, iterations=max(1, width))).astype(np.float32), 0.8 * width)
     rim = np.clip(rim * 2.0, 0, 1) * contour
     ys, xs = np.nonzero(m)
@@ -268,40 +270,45 @@ SCENARIOS = [
     dict(id='K-recolor-nose', photo='chelsea.png', scale=2,
          edits=[('recolor', ('ellipse', 263, 243, 28, 19))], arrows=[(263, 243)],
          protect=[('ellipse', 170, 113, 30, 25), ('ellipse', 318, 135, 28, 25)]),
-    # An object that looks like what is behind it, removed: `smooth` takes the
-    # photo's texture away, `objects` are in the original and not in the ideal
-    dict(id='S-arm', photo='astronaut.png', scale=2, smooth=5,
-         objects=[(('ellipse', 180, 360, 30, 95, 30), dict(lift=10, shade=0.05, contour=0.35, width=3))],
-         arrows=[(180, 360)], protect=[FACE_A]),
-    # (known limit: under a heavy repaint part of a large one is still left)
-    dict(id='S-arm-large', photo='astronaut.png', scale=2, smooth=5, left_max=30,
-         objects=[(('ellipse', 180, 360, 45, 150, 30), dict(lift=10, shade=0.05, contour=0.35, width=3))],
-         arrows=[(180, 360)], protect=[FACE_A]),
-    # (known limit: a hairline outline is not enough to go by — 'any' until it is)
-    dict(id='S-arm-thin-line', photo='astronaut.png', scale=2, smooth=5, levels=['mild'], expect='any', left_max=100,
-         objects=[(('ellipse', 180, 360, 45, 150, 30), dict(lift=10, shade=0.02, contour=0.35, width=1))],
-         arrows=[(180, 360)], protect=[FACE_A]),
-    # The same with the thing's extent known (the "find the object" switch):
-    # then faint change inside it is enough to go by
-    dict(id='S-arm-thin-line-found', photo='astronaut.png', scale=2, smooth=5, levels=['mild'], found=True,
-         objects=[(('ellipse', 180, 360, 45, 150, 30), dict(lift=10, shade=0.02, contour=0.35, width=1))],
-         arrows=[(180, 360)], protect=[FACE_A]),
-    dict(id='S-arm-large-found', photo='astronaut.png', scale=2, smooth=5, levels=['strong'], found=True,
-         objects=[(('ellipse', 180, 360, 45, 150, 30), dict(lift=10, shade=0.05, contour=0.35, width=3))],
-         arrows=[(180, 360)], protect=[FACE_A]),
+    # An object that looks like what is behind it, removed (an arm across a
+    # torso, both plain skin): `smooth` takes the photo's texture away,
+    # `objects` are in the original and not in the ideal. Inside, old and new
+    # look alike; what differs clearly is the outline.
+    #
+    # On their own these are NOT taken whole, by decision: without knowing
+    # where the thing is, its outline can't be told from fine lines of a face
+    # the model erased or moved, nor its faint inside from a re-toned face
+    # ('any' / left_max=100: whatever happens here is accepted — the answer is
+    # used as far as the clear change goes, or turned down).
+    dict(id='S-arm', photo='astronaut.png', scale=2, smooth=14, expect='any', left_max=100,
+         objects=[(('ellipse', 180, 360, 30, 95, 30), dict(lift=10, shade=0.05, contour=0.35, width=3))], arrows=[(180, 360)], protect=[FACE_A]),
+    dict(id='S-arm-thin-line', photo='astronaut.png', scale=2, smooth=14, levels=['mild'], expect='any', left_max=100,
+         objects=[(('ellipse', 180, 360, 30, 95, 30), dict(lift=10, shade=0.02, contour=0.35, width=1))], arrows=[(180, 360)], protect=[FACE_A]),
+    # With the thing's extent known (the "find the object" switch) all of it
+    # is taken: the faint inside, the outline, even a hairline one
+    dict(id='S-arm-found', photo='astronaut.png', scale=2, smooth=14, found=True,
+         objects=[(('ellipse', 180, 360, 30, 95, 30), dict(lift=10, shade=0.05, contour=0.35, width=3))], arrows=[(180, 360)], protect=[FACE_A]),
+    dict(id='S-arm-large-found', photo='astronaut.png', scale=2, smooth=14, found=True,
+         objects=[(('ellipse', 180, 360, 45, 150, 30), dict(lift=10, shade=0.05, contour=0.35, width=3))], arrows=[(180, 360)], protect=[FACE_A]),
+    dict(id='S-arm-thin-line-found', photo='astronaut.png', scale=2, smooth=14, levels=['mild'], found=True,
+         objects=[(('ellipse', 180, 360, 30, 95, 30), dict(lift=10, shade=0.02, contour=0.35, width=1))], arrows=[(180, 360)], protect=[FACE_A]),
+    # … also one that differs from what is behind it by its outline alone,
+    # with nothing changed where the arrow points
+    dict(id='S-arm-outline-only-found', photo='astronaut.png', scale=2, smooth=14, levels=['mild'], found=True,
+         objects=[(('ellipse', 180, 360, 45, 150, 30), dict(lift=0, shade=0.02, contour=0.35, width=3))], arrows=[(180, 360)], protect=[FACE_A]),
     # An extent that takes in a face (the box of a hood includes the head):
     # the face is guarded and must stay
     dict(id='A-hood-ring-found', photo='astronaut.png', scale=2, found=True, guard=True,
+         edits=[('recolor', ('ring', 225, 118, 98, 110, 60, 76))], arrows=[(225, 18)], protect=[('ellipse', 225, 124, 40, 52)]),
+    # … and when no box was given for the face, what the extent holds is seen
+    # to be still there and the extent is not used
+    dict(id='A-hood-ring-found-unguarded', photo='astronaut.png', scale=2, found=True,
          edits=[('recolor', ('ring', 225, 118, 98, 110, 60, 76))], arrows=[(225, 18)], protect=[('ellipse', 225, 124, 40, 52)]),
     # What the automatic part left behind, taken by the user's touch-ups
     dict(id='C-remove-spoon-touched', photo='coffee.png', scale=1.5, levels=['mild'],
          edits=[('fill', ('union', [('ellipse', 365, 288, 40, 44, 0), ('ellipse', 398, 170, 13, 100, -8)]))],
          arrows=[(365, 290)], protect=[('ellipse', 290, 150, 95, 55)],
          touches=[(394, 200, 30, True), (402, 140, 30, True), (408, 90, 30, True)]),
-    # … and one that differs from it by its outline alone
-    dict(id='S-arm-outline-only', photo='astronaut.png', scale=2, smooth=5, levels=['mild'],
-         objects=[(('ellipse', 180, 360, 30, 95, 30), dict(lift=0, shade=0.02, contour=0.35, width=3))],
-         arrows=[(180, 360)], protect=[FACE_A]),
 ]
 
 
@@ -338,7 +345,8 @@ def build(sc, level, seed):
     I = O.copy()
     gt = np.zeros((H, W), np.float32)
     for spec, look in sc.get('objects', []):
-        O, where = add_limb(O, shape_mask(H, W, spec, s), look['lift'], look['shade'], look['contour'], look['width'])
+        O, where = add_limb(O, shape_mask(H, W, spec, s), look['lift'], look['shade'], look['contour'], look['width'],
+                            [v * s for v in look.get('shift', (0, 0))])
         gt = np.maximum(gt, where)
     for kind, spec in sc.get('edits', []):
         m = shape_mask(H, W, spec, s)

@@ -158,7 +158,7 @@ export function MarkedImage({
                   strokeWidth={3}
                   paintOrder="stroke"
                 >
-                  {b.kind === 'face' ? 'face — kept' : (b.label ?? 'found')}
+                  {b.kind === 'face' ? 'face — guarded' : (b.label ?? 'found')}
                 </text>
               </g>
             )
