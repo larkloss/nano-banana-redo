@@ -232,6 +232,8 @@ function App() {
           onSubmit={(request) => studio.submit(studio.openSession!.id, request)}
           onRetry={(turnId) => studio.retry(studio.openSession!.id, turnId)}
           onUseWhole={(versionId) => void studio.takeWholePicture(studio.openSession!.id, versionId)}
+          onRecut={(versionId, touches) => studio.recut(studio.openSession!.id, versionId, touches)}
+          isRecutting={studio.isRecutting}
           onStop={studio.stop}
           onClose={studio.close}
         />

@@ -10,6 +10,7 @@ import {
   releaseLocalEdit,
   type LocalComposite,
   type LocalEditInfo,
+  type LocalEditOptions,
 } from './localEdit'
 import LocalEditWorker from './localEdit.worker?worker&inline'
 
@@ -19,7 +20,11 @@ import LocalEditWorker from './localEdit.worker?worker&inline'
 // if a worker can't be started (an unusual browser setup), it runs here
 // instead, just less smoothly.
 export interface LocalEditor {
-  compose(result: Blob): Promise<LocalComposite>
+  // `options`: what is known beyond the two pictures (where the things the
+  // arrows point at are, the user's touch-ups); otherwise the editor's own
+  compose(result: Blob, options?: LocalEditOptions): Promise<LocalComposite>
+  // Used for every composite that doesn't bring its own
+  options: LocalEditOptions
   release(): void
   // Per composited answer, keyed by the composite's base64
   extras: Map<string, { raw: ParsedImagePart; mask: Blob; info: LocalEditInfo }>
@@ -72,33 +77,37 @@ async function workerEditor(source: Blob, marks: EditMark[]): Promise<LocalEdito
     worker.terminate()
     throw err
   }
-  return {
-    compose: (result) => call<LocalComposite>({ type: 'compose', result }),
+  const editor: LocalEditor = {
+    compose: (result, options) => call<LocalComposite>({ type: 'compose', result, options: options ?? editor.options }),
     // Also drops any composite still being worked on
     release: () => {
       worker.terminate()
       fail(new EditorDead('released'))
     },
+    options: {},
     extras: new Map(),
     problem: null,
   }
+  return editor
 }
 
 async function inThreadEditor(source: Blob, marks: EditMark[]): Promise<LocalEditor> {
   const job = await prepareLocalEdit(source, marks)
-  return {
-    compose: async (result) => {
+  const editor: LocalEditor = {
+    compose: async (result, options) => {
       const bitmap = await createImageBitmap(result)
       try {
-        return await composeLocalEdit(job, bitmap)
+        return await composeLocalEdit(job, bitmap, options ?? editor.options)
       } finally {
         bitmap.close()
       }
     },
     release: () => releaseLocalEdit(job),
+    options: {},
     extras: new Map(),
     problem: null,
   }
+  return editor
 }
 
 // How a picture travels when the model can't answer in its shape (see

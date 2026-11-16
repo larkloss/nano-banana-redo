@@ -1,10 +1,16 @@
 // Background thread for the local-edit compositor (see localEditClient.ts)
-import { composeLocalEdit, prepareLocalEdit, releaseLocalEdit, type LocalEditJob } from './localEdit'
+import {
+  composeLocalEdit,
+  prepareLocalEdit,
+  releaseLocalEdit,
+  type LocalEditJob,
+  type LocalEditOptions,
+} from './localEdit'
 import type { EditMark } from './annotate'
 
 type Request =
   | { id: number; type: 'prepare'; source: Blob; marks: EditMark[] }
-  | { id: number; type: 'compose'; result: Blob }
+  | { id: number; type: 'compose'; result: Blob; options?: LocalEditOptions }
   | { id: number; type: 'release' }
 
 let job: LocalEditJob | null = null
@@ -19,7 +25,7 @@ self.onmessage = async (event: MessageEvent<Request>) => {
       if (!job) throw new Error('not prepared')
       const bitmap = await createImageBitmap(msg.result)
       try {
-        self.postMessage({ id: msg.id, ok: true, outcome: await composeLocalEdit(job, bitmap) })
+        self.postMessage({ id: msg.id, ok: true, outcome: await composeLocalEdit(job, bitmap, msg.options) })
       } finally {
         bitmap.close()
       }

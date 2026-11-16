@@ -186,6 +186,36 @@ def repaint(I, rng, level, out_scale=1.0):
     return Image.open(path).convert('RGB')
 
 
+# --- objects that are in the original and gone from the ideal ----------------------
+
+def smooth_photo(img, sigma, seed):
+    """The photo without its fine texture (smooth skin, plain cloth), plus camera grain."""
+    sm = np.stack([ndimage.gaussian_filter(img[..., c], sigma) for c in range(3)], -1)
+    rng = np.random.default_rng(seed)
+    return np.clip(sm + rng.normal(0, 1.5, sm.shape), 0, 255).astype(np.float32)
+
+
+def add_limb(base, m, lift, shade, contour, width):
+    """A limb-like object made of what is under it (an arm across a torso): the same
+    material, `lift` levels brighter, shaded like a rounded form, with a dark contour
+    `width` px wide and a soft drop shadow. Inside, old and new look alike; what differs
+    clearly is the outline. Returns the picture with it and where it is."""
+    soft = ndimage.gaussian_filter(m.astype(np.float32), 1.0)
+    depth = ndimage.distance_transform_edt(m)
+    depth = depth / max(1.0, depth.max())
+    obj = np.clip(base * (1 - shade + 2 * shade * np.sqrt(depth))[..., None] + lift, 0, 255)
+    rim = ndimage.gaussian_filter((m ^ ndimage.binary_erosion(m, iterations=max(1, width))).astype(np.float32), 0.8 * width)
+    rim = np.clip(rim * 2.0, 0, 1) * contour
+    ys, xs = np.nonzero(m)
+    size = min(ys.max() - ys.min(), xs.max() - xs.min()) / 2
+    shadow = ndimage.gaussian_filter(np.roll(np.roll(m.astype(np.float32), int(0.1 * size), 0), int(0.06 * size), 1), 0.12 * size) * 0.25
+    out = base * (1 - shadow[..., None] * (1 - soft[..., None]))
+    out = out * (1 - soft[..., None]) + obj * soft[..., None]
+    out = out * (1 - rim[..., None])
+    where = np.clip(np.maximum(soft, np.maximum(rim, shadow * 2 * (1 - soft))), 0, 1)
+    return out, where
+
+
 # --- scenarios ------------------------------------------------------------------
 # Coordinates are in the photo's native pixels; `scale` upsizes the original.
 
@@ -213,7 +243,9 @@ SCENARIOS = [
          arrows=[(170, 385), (303, 356)], protect=[FACE_A]),
     dict(id='A-hires', photo='astronaut.png', scale=4, out_scale=0.5,
          edits=[('fill', ('ellipse', 170, 385, 42, 42))], arrows=[(170, 385)], protect=[FACE_A]),
-    dict(id='C-remove-spoon', photo='coffee.png', scale=1.5,
+    # (known limit: the handle, cut off from the bowl by the cup's rim, is only
+    # partly taken — hence the allowance for what may be left)
+    dict(id='C-remove-spoon', photo='coffee.png', scale=1.5, left_max=35,
          edits=[('fill', ('union', [('ellipse', 365, 288, 40, 44, 0), ('ellipse', 398, 170, 13, 100, -8)]))],
          arrows=[(365, 290)], protect=[('ellipse', 290, 150, 95, 55)]),
     dict(id='C-recolor-saucer', photo='coffee.png', scale=1.5,
@@ -236,6 +268,40 @@ SCENARIOS = [
     dict(id='K-recolor-nose', photo='chelsea.png', scale=2,
          edits=[('recolor', ('ellipse', 263, 243, 28, 19))], arrows=[(263, 243)],
          protect=[('ellipse', 170, 113, 30, 25), ('ellipse', 318, 135, 28, 25)]),
+    # An object that looks like what is behind it, removed: `smooth` takes the
+    # photo's texture away, `objects` are in the original and not in the ideal
+    dict(id='S-arm', photo='astronaut.png', scale=2, smooth=5,
+         objects=[(('ellipse', 180, 360, 30, 95, 30), dict(lift=10, shade=0.05, contour=0.35, width=3))],
+         arrows=[(180, 360)], protect=[FACE_A]),
+    # (known limit: under a heavy repaint part of a large one is still left)
+    dict(id='S-arm-large', photo='astronaut.png', scale=2, smooth=5, left_max=30,
+         objects=[(('ellipse', 180, 360, 45, 150, 30), dict(lift=10, shade=0.05, contour=0.35, width=3))],
+         arrows=[(180, 360)], protect=[FACE_A]),
+    # (known limit: a hairline outline is not enough to go by — 'any' until it is)
+    dict(id='S-arm-thin-line', photo='astronaut.png', scale=2, smooth=5, levels=['mild'], expect='any', left_max=100,
+         objects=[(('ellipse', 180, 360, 45, 150, 30), dict(lift=10, shade=0.02, contour=0.35, width=1))],
+         arrows=[(180, 360)], protect=[FACE_A]),
+    # The same with the thing's extent known (the "find the object" switch):
+    # then faint change inside it is enough to go by
+    dict(id='S-arm-thin-line-found', photo='astronaut.png', scale=2, smooth=5, levels=['mild'], found=True,
+         objects=[(('ellipse', 180, 360, 45, 150, 30), dict(lift=10, shade=0.02, contour=0.35, width=1))],
+         arrows=[(180, 360)], protect=[FACE_A]),
+    dict(id='S-arm-large-found', photo='astronaut.png', scale=2, smooth=5, levels=['strong'], found=True,
+         objects=[(('ellipse', 180, 360, 45, 150, 30), dict(lift=10, shade=0.05, contour=0.35, width=3))],
+         arrows=[(180, 360)], protect=[FACE_A]),
+    # An extent that takes in a face (the box of a hood includes the head):
+    # the face is guarded and must stay
+    dict(id='A-hood-ring-found', photo='astronaut.png', scale=2, found=True, guard=True,
+         edits=[('recolor', ('ring', 225, 118, 98, 110, 60, 76))], arrows=[(225, 18)], protect=[('ellipse', 225, 124, 40, 52)]),
+    # What the automatic part left behind, taken by the user's touch-ups
+    dict(id='C-remove-spoon-touched', photo='coffee.png', scale=1.5, levels=['mild'],
+         edits=[('fill', ('union', [('ellipse', 365, 288, 40, 44, 0), ('ellipse', 398, 170, 13, 100, -8)]))],
+         arrows=[(365, 290)], protect=[('ellipse', 290, 150, 95, 55)],
+         touches=[(394, 200, 30, True), (402, 140, 30, True), (408, 90, 30, True)]),
+    # … and one that differs from it by its outline alone
+    dict(id='S-arm-outline-only', photo='astronaut.png', scale=2, smooth=5, levels=['mild'],
+         objects=[(('ellipse', 180, 360, 30, 95, 30), dict(lift=0, shade=0.02, contour=0.35, width=3))],
+         arrows=[(180, 360)], protect=[FACE_A]),
 ]
 
 
@@ -267,16 +333,21 @@ def build(sc, level, seed):
     O = load(sc['photo'], sc['scale'])
     H, W, _ = O.shape
     s = sc['scale']
+    if sc.get('smooth'):
+        O = smooth_photo(O, sc['smooth'], seed)
     I = O.copy()
     gt = np.zeros((H, W), np.float32)
-    for kind, spec in sc['edits']:
+    for spec, look in sc.get('objects', []):
+        O, where = add_limb(O, shape_mask(H, W, spec, s), look['lift'], look['shade'], look['contour'], look['width'])
+        gt = np.maximum(gt, where)
+    for kind, spec in sc.get('edits', []):
         m = shape_mask(H, W, spec, s)
         I, soft = apply_edit(I, m, kind, rng)
         gt = np.maximum(gt, soft)
     R = repaint(I, rng, level, sc.get('out_scale', 1.0))
     d = os.path.join(OUT, f"{sc['id']}__{level}")
     os.makedirs(d, exist_ok=True)
-    Image.fromarray(O.astype(np.uint8)).save(os.path.join(d, 'orig.png'))
+    Image.fromarray(np.clip(O, 0, 255).astype(np.uint8)).save(os.path.join(d, 'orig.png'))
     Image.fromarray(np.clip(I, 0, 255).astype(np.uint8)).save(os.path.join(d, 'ideal.png'))
     R.save(os.path.join(d, 'result.png'))
     Image.fromarray((gt * 255).astype(np.uint8)).save(os.path.join(d, 'gt.png'))
@@ -289,6 +360,24 @@ def build(sc, level, seed):
         marks=[dict(x=x * s / W, y=y * s / H) for x, y in sc['arrows']],
         expect=sc.get('expect', 'ok'),
     )
+    if 'left_max' in sc:
+        meta['left_max'] = sc['left_max']
+    # What the app may know beyond the two pictures
+    options = {}
+    if sc.get('found'):
+        # the box a vision model would give for the thing each arrow points at
+        ys, xs = np.nonzero(gt > 0.5)
+        box = dict(x0=xs.min() / W, y0=ys.min() / H, x1=(xs.max() + 1) / W, y1=(ys.max() + 1) / H)
+        options['extents'] = [box and dict(box=box) for _ in sc['arrows']]
+    if sc.get('guard'):
+        options['guarded'] = []
+        for spec in sc.get('protect', []):
+            ys, xs = np.nonzero(shape_mask(H, W, spec, s))
+            options['guarded'].append(dict(x0=xs.min() / W, y0=ys.min() / H, x1=(xs.max() + 1) / W, y1=(ys.max() + 1) / H))
+    if sc.get('touches'):
+        options['touches'] = [dict(x=x * s / W, y=y * s / H, r=r * s / min(W, H), take=take) for x, y, r, take in sc['touches']]
+    if options:
+        meta['options'] = options
     json.dump(meta, open(os.path.join(d, 'meta.json'), 'w'))
 
 

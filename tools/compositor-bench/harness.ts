@@ -1,6 +1,12 @@
 // Runs one bench case through the "only around arrows" compositor inside a
 // page. run.cjs bundles this file and calls window.runCase for every case.
-import { composeLocalEdit, lastLocalEditDebug, lastLocalEditStats, prepareLocalEdit } from '../../src/lib/localEdit'
+import {
+  composeLocalEdit,
+  lastLocalEditDebug,
+  lastLocalEditStats,
+  prepareLocalEdit,
+  type LocalEditOptions,
+} from '../../src/lib/localEdit'
 
 function b64ToBlob(b64: string, type: string): Blob {
   const bin = atob(b64)
@@ -28,7 +34,13 @@ async function mapToB64(map: Uint8Array, w: number, h: number): Promise<string> 
   return blobToB64(await canvas.convertToBlob({ type: 'image/png' }))
 }
 
-async function runCase(origB64: string, resB64: string, marks: { x: number; y: number }[], withMaps: boolean) {
+async function runCase(
+  origB64: string,
+  resB64: string,
+  marks: { x: number; y: number }[],
+  withMaps: boolean,
+  options?: LocalEditOptions,
+) {
   const t0 = performance.now()
   const job = await prepareLocalEdit(
     b64ToBlob(origB64, 'image/png'),
@@ -36,7 +48,7 @@ async function runCase(origB64: string, resB64: string, marks: { x: number; y: n
   )
   const t1 = performance.now()
   const result = await createImageBitmap(b64ToBlob(resB64, 'image/png'))
-  const out = await composeLocalEdit(job, result)
+  const out = await composeLocalEdit(job, result, options)
   const t2 = performance.now()
   const stats = lastLocalEditStats()
   const dbg = lastLocalEditDebug()

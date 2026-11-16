@@ -1,5 +1,24 @@
 import { useEffect, useRef, useState } from 'react'
 import { MAX_MARKS, arrowTail, markColor, type EditMark } from '../../lib/annotate'
+import type { Area, Touch } from '../../lib/localEdit'
+
+// Touching up a finished edit: clicks pick spots (of the size and kind chosen)
+// instead of placing arrows
+export interface TouchUp {
+  // Already part of the version on screen, and picked since
+  applied: Touch[]
+  pending: Touch[]
+  size: number
+  take: boolean
+  onAdd: (x: number, y: number) => void
+}
+
+// Where a vision model found the things the arrows point at, and the faces
+export interface FoundBox {
+  area: Area
+  kind: 'object' | 'face'
+  label?: string | null
+}
 
 interface Props {
   src: string
@@ -11,9 +30,11 @@ interface Props {
   onAdd: (x: number, y: number) => void
   onMove: (id: string, x: number, y: number) => void
   onActivate: (id: string) => void
-  // Tints this area of the picture (a white-on-transparent mask image) —
-  // used to show what an "only around the arrows" edit replaced
+  // A see-through tint laid over the picture — shows what an "only around the
+  // arrows" edit replaced
   overlayUrl?: string | null
+  touchUp?: TouchUp | null
+  boxes?: FoundBox[]
 }
 
 // The stage picture with the user's numbered arrows on top. Click anywhere to
@@ -33,10 +54,24 @@ interface Drag {
   startY: number
   moved: boolean
 }
-export function MarkedImage({ src, alt, marks, activeId, interactive, onAdd, onMove, onActivate, overlayUrl }: Props) {
+export function MarkedImage({
+  src,
+  alt,
+  marks,
+  activeId,
+  interactive,
+  onAdd,
+  onMove,
+  onActivate,
+  overlayUrl,
+  touchUp,
+  boxes,
+}: Props) {
   const imgRef = useRef<HTMLImageElement>(null)
   const [box, setBox] = useState<{ left: number; top: number; width: number; height: number } | null>(null)
   const drag = useRef<Drag | null>(null)
+  // Where the next touch-up would land (shows its size before the click)
+  const [hover, setHover] = useState<{ x: number; y: number } | null>(null)
 
   // The overlay has to sit exactly on the rendered picture, which moves and
   // resizes with the layout; ResizeObserver also reports once on observe
@@ -72,22 +107,107 @@ export function MarkedImage({ src, alt, marks, activeId, interactive, onAdd, onM
     <>
       <img ref={imgRef} src={src} alt={alt} className="max-h-full max-w-full object-contain" draggable={false} />
       {box && overlayUrl && (
-        <div
+        <img
           aria-hidden
-          className="pointer-events-none absolute bg-fuchsia-500/55"
-          style={{
-            left: box.left,
-            top: box.top,
-            width: box.width,
-            height: box.height,
-            maskImage: `url(${overlayUrl})`,
-            maskSize: '100% 100%',
-            WebkitMaskImage: `url(${overlayUrl})`,
-            WebkitMaskSize: '100% 100%',
-          }}
+          alt=""
+          src={overlayUrl}
+          draggable={false}
+          className="pointer-events-none absolute"
+          style={{ left: box.left, top: box.top, width: box.width, height: box.height }}
         />
       )}
-      {box && interactive && (
+      {box && boxes && boxes.length > 0 && (
+        <svg
+          aria-hidden
+          className="pointer-events-none absolute"
+          style={{ left: box.left, top: box.top, width: box.width, height: box.height }}
+          viewBox={`0 0 ${box.width} ${box.height}`}
+        >
+          {boxes.map((b, i) => {
+            const colour = b.kind === 'face' ? '#30d158' : '#0a84ff'
+            const x = b.area.x0 * box.width
+            const y = b.area.y0 * box.height
+            return (
+              <g key={i}>
+                <rect
+                  x={x}
+                  y={y}
+                  width={(b.area.x1 - b.area.x0) * box.width}
+                  height={(b.area.y1 - b.area.y0) * box.height}
+                  fill="none"
+                  stroke="rgba(0,0,0,0.55)"
+                  strokeWidth={4}
+                />
+                <rect
+                  x={x}
+                  y={y}
+                  width={(b.area.x1 - b.area.x0) * box.width}
+                  height={(b.area.y1 - b.area.y0) * box.height}
+                  fill="none"
+                  stroke={colour}
+                  strokeWidth={2}
+                  strokeDasharray="7 5"
+                />
+                <text
+                  x={x + 5}
+                  y={y + 14}
+                  fill="#fff"
+                  fontSize={11}
+                  fontWeight="bold"
+                  stroke="rgba(0,0,0,0.7)"
+                  strokeWidth={3}
+                  paintOrder="stroke"
+                >
+                  {b.kind === 'face' ? 'face — kept' : (b.label ?? 'found')}
+                </text>
+              </g>
+            )
+          })}
+        </svg>
+      )}
+      {box && touchUp && (
+        <svg
+          className="absolute touch-none select-none"
+          style={{ left: box.left, top: box.top, width: box.width, height: box.height, cursor: 'crosshair' }}
+          viewBox={`0 0 ${box.width} ${box.height}`}
+          onPointerDown={(e) => {
+            if (e.button !== 0) return
+            e.preventDefault()
+            const p = toPicture(e, e.currentTarget)
+            touchUp.onAdd(clamp01(p.x), clamp01(p.y))
+          }}
+          onPointerMove={(e) => setHover(toPicture(e, e.currentTarget))}
+          onPointerLeave={() => setHover(null)}
+        >
+          {[...touchUp.applied.map((t) => ({ t, fresh: false })), ...touchUp.pending.map((t) => ({ t, fresh: true }))].map(
+            ({ t, fresh }, i) => (
+              <circle
+                key={i}
+                cx={t.x * box.width}
+                cy={t.y * box.height}
+                r={Math.max(3, t.r * unit)}
+                fill={t.take ? 'rgba(48,209,88,0.28)' : 'rgba(255,159,10,0.28)'}
+                stroke={t.take ? '#30d158' : '#ff9f0a'}
+                strokeWidth={fresh ? 2.5 : 1.5}
+                strokeDasharray={fresh ? undefined : '4 4'}
+                opacity={fresh ? 1 : 0.6}
+              />
+            ),
+          )}
+          {hover && (
+            <circle
+              cx={hover.x * box.width}
+              cy={hover.y * box.height}
+              r={Math.max(3, touchUp.size * unit)}
+              fill="none"
+              stroke={touchUp.take ? '#30d158' : '#ff9f0a'}
+              strokeWidth={1.5}
+              style={{ pointerEvents: 'none' }}
+            />
+          )}
+        </svg>
+      )}
+      {box && interactive && !touchUp && (
         <svg
           className="absolute touch-none select-none"
           style={{ left: box.left, top: box.top, width: box.width, height: box.height, cursor: 'crosshair' }}

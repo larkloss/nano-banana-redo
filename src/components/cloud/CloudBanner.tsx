@@ -101,6 +101,7 @@ const KEY_LABELS: Record<string, string> = {
   'nbr.videoPromptModules.v1': 'video prompts',
   'nbr.videoSettings.v1': 'video settings',
   'nbr.edit.settings.v1': 'edit settings',
+  'nbr.studio.v1': 'edit studio options',
   'refs:generator': 'reference photos',
 }
 

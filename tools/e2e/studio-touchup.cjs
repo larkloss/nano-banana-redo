@@ -1,0 +1,212 @@
+// End-to-end check of the edit studio's "only around arrows" extras, in the
+// built app with the model's answers faked: touch-ups (take / put back, no
+// request) and "find the object".
+//
+//   npm run build:single                      (the page under test)
+//   (cd tools/compositor-bench && python sim.py)   (the pictures it uses, once)
+//   node tools/e2e/studio-touchup.cjs [--shots]
+//
+// Exits with status 1 if a check fails. --shots saves screenshots to tools/e2e/shots/.
+const { chromium } = require('playwright')
+const fs = require('fs')
+const path = require('path')
+const B = path.join(__dirname, '..', 'compositor-bench', 'cases') + path.sep
+const APP = 'file://' + path.join(__dirname, '..', '..', 'nano-banana.html')
+const SHOTS = process.argv.includes('--shots') ? path.join(__dirname, 'shots') : null
+if (SHOTS) fs.mkdirSync(SHOTS, { recursive: true })
+const shot = (p, name) => (SHOTS ? p.screenshot({ path: path.join(SHOTS, name) }) : null)
+const read = (c, f) => fs.readFileSync(B + c + '/' + f)
+const b64 = (c, f) => read(c, f).toString('base64')
+const meta = (c) => JSON.parse(read(c, 'meta.json'))
+const image = (data) => JSON.stringify({ candidates: [{ content: { parts: [{ inlineData: { mimeType: 'image/png', data } }] }, finishReason: 'STOP' }] })
+const text = (t) => JSON.stringify({ candidates: [{ content: { parts: [{ text: t }] }, finishReason: 'STOP' }] })
+let pass = 0, fail = 0
+const check = (name, ok, detail = '') => { console.log((ok ? 'PASS ' : 'FAIL ') + name + (detail ? ' — ' + detail : '')); ok ? pass++ : fail++ }
+
+async function open(browser, kase, { locator } = {}) {
+  const p = await browser.newPage({ viewport: { width: 1440, height: 950 } })
+  const errors = []; p.on('pageerror', (e) => errors.push(e.message)); p.on('console', (m) => m.type() === 'error' && errors.push(m.text()))
+  const calls = { image: 0, locate: 0, locateBodies: [] }
+  await p.route('https://generativelanguage.googleapis.com/**', async (route) => {
+    const url = route.request().url()
+    if (/gemini-4-carbon|my-locator/.test(url)) {
+      calls.locate++
+      calls.locateBodies.push(route.request().postDataJSON())
+      if (locator === 'error') return route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: { code: 500, message: 'backend unavailable' } }) })
+      return route.fulfill({ contentType: 'application/json', body: text(locator) })
+    }
+    calls.image++
+    await route.fulfill({ contentType: 'application/json', body: image(calls.image === 1 ? b64(kase, 'orig.png') : b64(kase, 'result.png')) })
+  })
+  await p.goto(APP)
+  await p.evaluate(() => {
+    localStorage.clear(); localStorage.setItem('nbr.apiKey', 'g')
+    localStorage.setItem('nbr.settings.v1', JSON.stringify({ targetCount: 1, prompt: 'x', attemptsCap: 3 })); localStorage.setItem('nbr.capDefault50', '1')
+    localStorage.setItem('nbr.promptModules.v1', JSON.stringify({ mode: 'simple', modules: [] }))
+  })
+  await p.reload()
+  await p.click('button:has-text("Generate 1 image")'); await p.waitForSelector('main img[alt^="Generated"]')
+  await p.locator('button:has-text("✏️ Edit")').first().click(); await p.waitForSelector('[role=dialog] svg')
+  return { p, calls, errors }
+}
+const stage = (p) => p.locator('[role=dialog] svg.touch-none').first().boundingBox()
+async function clickAt(p, x, y) { const box = await stage(p); await p.mouse.click(box.x + box.width * x, box.y + box.height * y) }
+async function arrowAndApply(p, m) {
+  await clickAt(p, m.x, m.y)
+  await p.keyboard.type('remove this')
+  await p.click('[role=dialog] button:has-text("Apply edit")')
+  await p.waitForFunction(() => /Done in|Done on|Gave up|went wrong|Stopped/.test(document.querySelector('[role=dialog]').innerText), null, { timeout: 90000 })
+  return p.evaluate(() => document.querySelector('[role=dialog]').innerText)
+}
+// Pixels of two versions (by alt text), compared
+async function diff(p, a, b, discs = []) {
+  return p.evaluate(async ({ a, b, discs }) => {
+    const imgs = [...document.querySelectorAll('[role=dialog] section img')]
+    const load = async (alt) => createImageBitmap(await (await fetch(imgs.find((i) => i.alt === alt).src)).blob())
+    const [A, C] = [await load(a), await load(b)]
+    const px = (bm) => { const cv = new OffscreenCanvas(bm.width, bm.height); const x = cv.getContext('2d'); x.drawImage(bm, 0, 0); return x.getImageData(0, 0, bm.width, bm.height).data }
+    const pa = px(A), pc = px(C), W = A.width, H = A.height, unit = Math.min(W, H)
+    let changed = 0, outside = 0
+    const inDisc = discs.map(() => ({ total: 0, changed: 0 }))
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      const i = (y * W + x) * 4
+      const d = pa[i] !== pc[i] || pa[i + 1] !== pc[i + 1] || pa[i + 2] !== pc[i + 2]
+      if (d) changed++
+      let near = false
+      discs.forEach((t, k) => {
+        const r = Math.hypot(x - t.x * W, y - t.y * H) / unit
+        if (r <= t.r) { inDisc[k].total++; if (d) inDisc[k].changed++ }
+        if (r <= t.r + 0.07) near = true
+      })
+      if (d && !near) outside++
+    }
+    return { size: [W, H], changed, changedPct: +(100 * changed / (W * H)).toFixed(2), outside, inDisc }
+  }, { a, b, discs })
+}
+
+// Pixels that were still the original's in `before` and are not in `after`, away from the spots
+async function disturbed(p, before, after, discs) {
+  return p.evaluate(async ({ before, after, discs }) => {
+    const imgs = [...document.querySelectorAll('[role=dialog] section img')]
+    const load = async (alt) => createImageBitmap(await (await fetch(imgs.find((i) => i.alt === alt).src)).blob())
+    const [O, A, C] = [await load('Original'), await load(before), await load(after)]
+    const px = (bm) => { const cv = new OffscreenCanvas(bm.width, bm.height); const x = cv.getContext('2d'); x.drawImage(bm, 0, 0); return x.getImageData(0, 0, bm.width, bm.height).data }
+    const po = px(O), pa = px(A), pc = px(C), W = O.width, H = O.height, unit = Math.min(W, H)
+    const same = (u, v, i) => u[i] === v[i] && u[i + 1] === v[i + 1] && u[i + 2] === v[i + 2]
+    let count = 0
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      const i = (y * W + x) * 4
+      if (!same(po, pa, i) || same(po, pc, i)) continue
+      if (discs.some((t) => Math.hypot(x - t.x * W, y - t.y * H) / unit <= t.r + 0.07)) continue
+      count++
+    }
+    return count
+  }, { before, after, discs })
+}
+
+;(async () => {
+  const browser = await chromium.launch()
+
+  // ---- 1. Touch-ups: the spoon's handle is left behind; three clicks take it
+  {
+    const kase = 'C-remove-spoon__mild', m = meta(kase)
+    const { p, calls, errors } = await open(browser, kase)
+    const txt = await arrowAndApply(p, m.marks[0])
+    check('spoon edit done', /Done/.test(txt), (txt.match(/Done[^\n]*/) || [''])[0])
+    const callsBefore = calls.image
+    await p.click('[role=dialog] button:has-text("Touch up")')
+    await p.waitForSelector('[role=dialog] button:has-text("Take from the model")')
+    // the handle: native (394,200) (402,140) (408,90) on a 600x400 photo
+    const spots = [[394, 200], [402, 140], [408, 90]].map(([x, y]) => ({ x: x / 600, y: y / 400, r: 0.07 }))
+    for (const s of spots) await clickAt(p, s.x, s.y)
+    await shot(p, '1-touch-take.png')
+    const applyLabel = await p.locator('[role=dialog] button:has-text("no new request")').innerText()
+    check('apply button counts the spots', /Apply 3/.test(applyLabel), applyLabel)
+    await p.click('[role=dialog] button:has-text("no new request")')
+    await p.waitForFunction(() => [...document.querySelectorAll('[role=dialog] section img')].some((i) => i.alt === 'Version 2'), null, { timeout: 60000 })
+    check('no request was made for the touch-up', calls.image === callsBefore, `image calls ${callsBefore} → ${calls.image}`)
+    const moved = await disturbed(p, 'Version 1', 'Version 2', spots)
+    check('next to nothing that was still the original is touched away from the spots (the seam may settle a few px differently)', moved < 300, moved + ' px')
+    const d02 = await diff(p, 'Original', 'Version 2', spots)
+    check('the spots are now taken from the model', d02.inDisc.every((k) => k.changed > 0.5 * k.total), JSON.stringify(d02.inDisc))
+    check('touch-up mode ended and version 2 is on screen', (await p.locator('[role=dialog] span.absolute.left-3').innerText()) === 'Version 2')
+    check('the touched-up version can be touched up again, and its whole picture used', !(await p.locator('[role=dialog] button:has-text("Touch up")').isDisabled()) && !(await p.locator('[role=dialog] button:has-text("Use whole picture")').isDisabled()))
+
+    // put the original back at the spoon's bowl (the arrow itself)
+    await p.click('[role=dialog] button:has-text("Touch up")')
+    await p.click('[role=dialog] button:has-text("Put the original back")')
+    await p.click('[role=dialog] button:text-is("S")')
+    const back = { x: m.marks[0].x, y: m.marks[0].y, r: 0.035 }
+    await clickAt(p, back.x, back.y)
+    await shot(p, '2-touch-back.png')
+    await p.click('[role=dialog] button:has-text("no new request")')
+    await p.waitForFunction(() => [...document.querySelectorAll('[role=dialog] section img')].some((i) => i.alt === 'Version 3'), null, { timeout: 60000 })
+    const d03 = await diff(p, 'Original', 'Version 3', [back])
+    check('inside the put-back spot the picture is the original again', d03.inDisc[0].changed === 0, JSON.stringify(d03.inDisc))
+    const moved3 = await disturbed(p, 'Version 2', 'Version 3', [back])
+    check('putting back touches next to nothing that was still the original elsewhere', moved3 < 300, moved3 + ' px')
+    check('still no request', calls.image === callsBefore)
+    const gallery = await p.locator('main img[alt^="Generated"], main img').count()
+    console.log('     gallery pictures:', gallery, '| errors:', errors)
+    check('no page errors', errors.length === 0, errors.join(' | '))
+    await p.close()
+  }
+
+  // ---- 2. Find the object: a hairline outline is not enough without it
+  const kase = 'S-arm-thin-line__mild', m = meta(kase)
+  {
+    const { p, calls, errors } = await open(browser, kase)
+    const txt = await arrowAndApply(p, m.marks[0])
+    check('without "find the object" the answers are not usable', /Gave up/.test(txt), (txt.match(/Gave up[^\n]*/) || [''])[0].slice(0, 80))
+    check('no locator request when the switch is off', calls.locate === 0)
+    check('no page errors', errors.length === 0, errors.join(' | '))
+    await p.close()
+  }
+  {
+    // the box of the limb (from the ground truth), as Gemini would give it: [ymin,xmin,ymax,xmax] 0-1000
+    const located = JSON.stringify({ objects: [{ arrow: 1, label: 'left arm', box_2d: [390, 190, 1000, 520] }], faces: [{ box_2d: [110, 340, 360, 540] }] })
+    const { p, calls, errors } = await open(browser, kase, { locator: '```json\n' + located + '\n```' })
+    await clickAt(p, m.marks[0].x, m.marks[0].y)
+    await p.keyboard.type('remove this')
+    const box = p.locator('[role=dialog] label:has-text("find the object") input')
+    check('"find the object" is off to begin with', !(await box.isChecked()))
+    await box.check()
+    check('model field shows the default', (await p.locator('[role=dialog] input[aria-label="Gemini model that finds the object"]').getAttribute('placeholder')) === 'gemini-4-carbon')
+    await shot(p, '3-find-switch.png')
+    await p.click('[role=dialog] button:has-text("Apply edit")')
+    await p.waitForFunction(() => /Done in|Done on|Gave up|went wrong|Stopped/.test(document.querySelector('[role=dialog]').innerText), null, { timeout: 90000 })
+    const txt = await p.evaluate(() => document.querySelector('[role=dialog]').innerText)
+    check('with it the edit is done', /Done/.test(txt), (txt.match(/Done[^\n]*|Gave up[^\n]*/) || [''])[0].slice(0, 80))
+    check('one locator request, with two pictures and the instruction', calls.locate === 1 && calls.locateBodies[0].contents[0].parts.filter((x) => x.inlineData).length === 2 && /remove this/.test(JSON.stringify(calls.locateBodies[0])), 'calls ' + calls.locate)
+    check('the note says what was found', /Found: left arm \(1\) · 1 face left alone/.test(txt), (txt.match(/Found:[^\n]*/) || ['(none)'])[0])
+    const d = await diff(p, 'Original', 'Version 1')
+    check('a large part of the limb was taken', d.changedPct > 5, d.changedPct + '% of the picture')
+    // hold "what changed": boxes are drawn
+    const btn = p.locator('[role=dialog] button:has-text("Hold: what changed")'); const bb = await btn.boundingBox()
+    await p.mouse.move(bb.x + bb.width / 2, bb.y + bb.height / 2); await p.mouse.down()
+    const labels = await p.evaluate(() => [...document.querySelectorAll('[role=dialog] svg[aria-hidden] text')].map((t) => t.textContent))
+    await shot(p, '4-found-boxes.png')
+    await p.mouse.up()
+    check('the found boxes are shown', labels.includes('left arm') && labels.includes('face — kept'), JSON.stringify(labels))
+    const stored = await p.evaluate(() => localStorage.getItem('nbr.studio.v1'))
+    check('the switch is remembered', /"findObject":true/.test(stored || ''), stored)
+    check('no page errors', errors.length === 0, errors.join(' | '))
+    await p.close()
+  }
+  {
+    // the locator fails: the edit goes on as it would without (here: not usable), with a note
+    const { p, calls, errors } = await open(browser, kase, { locator: 'error' })
+    await clickAt(p, m.marks[0].x, m.marks[0].y)
+    await p.keyboard.type('remove this')
+    await p.locator('[role=dialog] label:has-text("find the object") input').check()
+    await p.click('[role=dialog] button:has-text("Apply edit")')
+    await p.waitForFunction(() => /Done in|Done on|Gave up|went wrong|Stopped/.test(document.querySelector('[role=dialog]').innerText), null, { timeout: 120000 })
+    const txt = await p.evaluate(() => document.querySelector('[role=dialog]').innerText)
+    check('a failed locator does not fail the edit by itself, and says why', /Gave up/.test(txt) && /didn’t get an answer \(backend unavailable\)/.test(txt), (txt.match(/“Find the object”[^\n]*/) || ['(no note)'])[0].slice(0, 110))
+    console.log('     locator calls:', calls.locate, '| image calls:', calls.image, '| errors:', errors.filter((e) => !/500/.test(e)))
+    await p.close()
+  }
+  await browser.close()
+  console.log(`\n${pass} passed, ${fail} failed`)
+  process.exit(fail ? 1 : 0)
+})().catch((e) => { console.error(e); process.exit(1) })

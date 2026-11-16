@@ -264,6 +264,36 @@ export function saveApiKey(index: ApiKeyIndex, key: string, provider: Provider =
   }
 }
 
+// The edit studio's own standing choices (not part of the generator's
+// settings): whether "find the object" is on, and which Gemini model answers
+const STUDIO_KEY = 'nbr.studio.v1'
+
+export interface StudioPrefs {
+  findObject: boolean
+  // '' = the default model
+  locatorModel: string
+}
+
+export function loadStudioPrefs(): StudioPrefs {
+  try {
+    const raw = JSON.parse(localStorage.getItem(STUDIO_KEY) ?? '{}') as Partial<StudioPrefs>
+    return {
+      findObject: raw.findObject === true,
+      locatorModel: typeof raw.locatorModel === 'string' ? raw.locatorModel.trim().slice(0, 80) : '',
+    }
+  } catch {
+    return { findObject: false, locatorModel: '' }
+  }
+}
+
+export function saveStudioPrefs(prefs: StudioPrefs): void {
+  try {
+    localStorage.setItem(STUDIO_KEY, JSON.stringify(prefs))
+  } catch {
+    // ignore
+  }
+}
+
 function clampInt(value: unknown, min: number, max: number, fallback: number): number {
   const n = typeof value === 'number' ? Math.round(value) : NaN
   if (Number.isNaN(n)) return fallback

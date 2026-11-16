@@ -51,11 +51,14 @@ async function main() {
     const meta = JSON.parse(fs.readFileSync(path.join(dir, 'meta.json'), 'utf8'))
     const orig = fs.readFileSync(path.join(dir, 'orig.png')).toString('base64')
     const res = fs.readFileSync(path.join(dir, 'result.png')).toString('base64')
-    const out = await page.evaluate(({ o, r, m, maps }) => window.runCase(o, r, m, maps), {
+    // meta.options: what the app would know beyond the two pictures (the
+    // extent of the thing an arrow points at, guarded areas, touch-ups)
+    const out = await page.evaluate(({ o, r, m, maps, options }) => window.runCase(o, r, m, maps, options), {
       o: orig,
       r: res,
       m: meta.marks,
       maps: withMaps,
+      options: meta.options,
     })
     const od = path.join(HERE, 'out', tag, id)
     fs.mkdirSync(od, { recursive: true })

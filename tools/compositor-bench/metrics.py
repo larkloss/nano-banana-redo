@@ -9,6 +9,8 @@ Per case (ok results):
              (1 - error vs ideal / error of doing nothing), inside the edit
   extra    - area taken from the model beyond the edit (+ a small margin),
              as % of the picture: everything there drifted for no reason
+  left     - share of the edit's clearly different pixels that the composite
+             left exactly as the original (% — the part of the edit not taken)
   protect  - share of protected pixels (faces, other eye...) that are
              bit-identical to the original (must be 100%)
   seam     - mean colour error vs ideal on the seam band (±3px around the
@@ -25,6 +27,7 @@ from PIL import Image
 from scipy import ndimage
 
 B = os.path.dirname(os.path.abspath(__file__))
+LEFT_MAX = 15  # % of the edit that may be left behind
 
 
 def arr(path, mode='RGB'):
@@ -63,6 +66,9 @@ def score(tag, cid, render=True):
         # inside the edit, i.e. where the composite takes the answer fully
         full = np.all(C != O, -1) & core
         row['ownErr'] = round(float(err_c[full].mean()), 1) if full.sum() > 50 else None
+    real = (gt > 0.5) & (np.abs(O - I).max(-1) > 12)
+    if real.sum() > 0:
+        row['left'] = round(float((real & ~replaced).sum() / real.sum() * 100), 1)
     margin = ndimage.binary_dilation(gt > 0.02, iterations=max(2, int(0.05 * short)))
     row['extra%'] = round(float((replaced & ~margin).sum() / (H * W) * 100), 2)
     row['taken%'] = round(float(replaced.sum() / (H * W) * 100), 2)
@@ -82,7 +88,7 @@ def score(tag, cid, render=True):
         g_err = np.abs(gx(C) - gx(I)) + np.abs(gy(C) - gy(I))
         row['seamGrad'] = round(float(g_err[band].mean()), 2)
         # reference: the same band in the raw model answer, aligned roughly
-    row['pass'] = meta['expect'] in ('ok', 'any') and row['protect'] in (None, 100.0)
+    row['pass'] = meta['expect'] in ('ok', 'any') and row['protect'] in (None, 100.0) and row.get('left', 0) <= meta.get('left_max', LEFT_MAX)
     row['limit'] = out['info']['reachedLimit']
     row['arrows'] = ''.join(str(int(a)) for a in out['info']['arrowsChanged'])
 
@@ -112,9 +118,9 @@ def score(tag, cid, render=True):
 if __name__ == '__main__':
     tag = sys.argv[1]
     render = '--no-render' not in sys.argv
-    ids = sorted(os.listdir(os.path.join(B, 'out', tag)))
+    ids = sorted(d for d in os.listdir(os.path.join(B, 'out', tag)) if os.path.isdir(os.path.join(B, 'out', tag, d)))
     rows = [score(tag, cid, render) for cid in ids]
-    cols = ['id', 'kind', 'pass', 'arrows', 'kept', 'coreErr', 'ownErr', 'taken%', 'extra%', 'protect', 'strict', 'seam', 'seamGrad', 'limit', 'ms']
+    cols = ['id', 'kind', 'pass', 'arrows', 'kept', 'left', 'coreErr', 'ownErr', 'taken%', 'extra%', 'protect', 'strict', 'seam', 'seamGrad', 'limit', 'ms']
     print(' '.join(c.rjust(9) if c != 'id' else c.ljust(28) for c in cols))
     for r in rows:
         print(' '.join((str(r.get(c, '')) if r.get(c) is not None else '-').rjust(9) if c != 'id' else r['id'].ljust(28) for c in cols))
