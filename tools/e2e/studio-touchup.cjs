@@ -26,7 +26,7 @@ const check = (name, ok, detail = '') => { console.log((ok ? 'PASS ' : 'FAIL ') 
 async function open(browser, kase, { locator, oldWayOnly } = {}) {
   const p = await browser.newPage({ viewport: { width: 1440, height: 950 } })
   const errors = []; p.on('pageerror', (e) => errors.push(e.message)); p.on('console', (m) => m.type() === 'error' && errors.push(m.text()))
-  const calls = { image: 0, locate: 0, locateOld: 0, locateBodies: [] }
+  const calls = { image: 0, locate: 0, locateOld: 0, locateBodies: [], oldBodies: [] }
   await p.route('https://generativelanguage.googleapis.com/**', async (route) => {
     const url = route.request().url()
     // "Find the object" asks through the Interactions API first, and the older
@@ -41,6 +41,7 @@ async function open(browser, kase, { locator, oldWayOnly } = {}) {
     }
     if (/gemini-4-hydrogen|gemini-4-carbon/.test(url)) {
       calls.locateOld++
+      calls.oldBodies.push(body)
       if (locator === 'error') return route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: { code: 500, message: 'backend unavailable' } }) })
       return route.fulfill({ contentType: 'application/json', body: text(locator) })
     }
@@ -188,6 +189,7 @@ async function disturbed(p, before, after, discs) {
     check('with it the edit is done', /Done/.test(txt), (txt.match(/Done[^\n]*|Gave up[^\n]*/) || [''])[0].slice(0, 80))
     const sent = calls.locateBodies[0] || {}
     check('one locator request (Interactions API), with two pictures and the instruction', calls.locate === 1 && calls.locateOld === 0 && sent.model === 'gemini-4-hydrogen' && sent.input.filter((x) => x.type === 'image').length === 2 && /remove this/.test(JSON.stringify(sent.input)), `calls ${calls.locate}+${calls.locateOld}, model ${sent.model}`)
+    check('the default model is left at its own thinking level', sent.generation_config === undefined)
     check('the note says what was found', /Found: left arm \(1\) · 1 face left alone/.test(txt), (txt.match(/Found:[^\n]*/) || ['(none)'])[0])
     const d = await diff(p, 'Original', 'Version 1')
     check('a large part of the limb was taken', d.changedPct > 5, d.changedPct + '% of the picture')
@@ -215,6 +217,7 @@ async function disturbed(p, before, after, discs) {
     await p.waitForFunction(() => /Done in|Done on|Gave up|went wrong|Stopped/.test(document.querySelector('[role=dialog]').innerText), null, { timeout: 90000 })
     const txt = await p.evaluate(() => document.querySelector('[role=dialog]').innerText)
     check('falls back to the older request when the Interactions API refuses, with the typed model', /Done/.test(txt) && calls.locate === 1 && calls.locateOld === 1 && calls.locateBodies[0].model === 'gemini-4-carbon' && /Found: arm \(1\)/.test(txt), `calls ${calls.locate}+${calls.locateOld}, ${(txt.match(/Found:[^\n]*/) || ['(no note)'])[0]}`)
+    check('Carbon is asked to think at its low level, either way', calls.locateBodies[0].generation_config?.thinking_level === 'low' && calls.oldBodies[0]?.generationConfig?.thinkingConfig?.thinkingLevel === 'LOW', JSON.stringify([calls.locateBodies[0].generation_config, calls.oldBodies[0]?.generationConfig?.thinkingConfig]))
     check('no page errors beyond the refused request', errors.filter((e) => !/404/.test(e)).length === 0, errors.join(' | '))
     await p.close()
   }

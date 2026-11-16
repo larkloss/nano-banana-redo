@@ -1,4 +1,4 @@
-import { GoogleGenAI } from '@google/genai'
+import { GoogleGenAI, ThinkingLevel } from '@google/genai'
 import type { EditMark } from './annotate'
 import { renderGuide } from './annotate'
 import type { Area, ObjectExtent } from './localEdit'
@@ -42,6 +42,10 @@ export async function locateObjects(
   const [plain, guide] = await Promise.all([smallCopy(picture), renderGuide(picture, marks)])
   const ai = new GoogleGenAI({ apiKey })
   const prompt = locatePrompt(marks)
+  // Gemini 4 Carbon thinks at "medium" unless told otherwise, and bills every
+  // thinking token; finding a box is what its guide calls a "low" job. Other
+  // models are left at their defaults (not all take a thinking level).
+  const quick = /carbon/i.test(modelId)
   let text: string
   try {
     // The Interactions API: what Google's image-understanding guide uses for
@@ -55,6 +59,7 @@ export async function locateObjects(
           { type: 'text', text: prompt },
         ],
         response_format: { type: 'text', mime_type: 'application/json' },
+        ...(quick ? { generation_config: { thinking_level: 'low' as const } } : {}),
       },
       { signal },
     )
@@ -76,7 +81,11 @@ export async function locateObjects(
             ],
           },
         ],
-        config: { responseMimeType: 'application/json', abortSignal: signal },
+        config: {
+          responseMimeType: 'application/json',
+          ...(quick ? { thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } } : {}),
+          abortSignal: signal,
+        },
       })
       text = (response.candidates?.[0]?.content?.parts ?? [])
         .map((p) => (typeof p.text === 'string' ? p.text : ''))
