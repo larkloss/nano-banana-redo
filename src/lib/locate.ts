@@ -13,7 +13,10 @@ import { isMockMode } from './mockGemini'
 // never takes a face on the strength of it. One extra request per edit, with
 // the Google key; any failure just leaves the edit as it would be without.
 
-export const DEFAULT_LOCATOR_MODEL = 'gemini-4-carbon'
+// The model Google's own image-understanding guide uses; any Gemini model
+// that understands pictures will do (the stronger gemini-4-carbon included)
+export const DEFAULT_LOCATOR_MODEL = 'gemini-4-hydrogen'
+export const LOCATOR_MODELS = ['gemini-4-hydrogen', 'gemini-4-carbon']
 
 export interface Located {
   // Per arrow, in the arrows' order
@@ -38,24 +41,68 @@ export async function locateObjects(
 
   const [plain, guide] = await Promise.all([smallCopy(picture), renderGuide(picture, marks)])
   const ai = new GoogleGenAI({ apiKey })
-  const response = await ai.models.generateContent({
-    model: modelId,
-    contents: [
+  const prompt = locatePrompt(marks)
+  let text: string
+  try {
+    // The Interactions API: what Google's image-understanding guide uses for
+    // the Gemini 4 models
+    const interaction = await ai.interactions.create(
       {
-        role: 'user',
-        parts: [
-          { inlineData: { mimeType: plain.mimeType, data: plain.base64 } },
-          { inlineData: { mimeType: guide.mimeType, data: guide.base64 } },
-          { text: locatePrompt(marks) },
+        model: modelId,
+        input: [
+          { type: 'image', data: plain.base64, mime_type: 'image/jpeg' },
+          { type: 'image', data: guide.base64, mime_type: 'image/jpeg' },
+          { type: 'text', text: prompt },
         ],
+        response_format: { type: 'text', mime_type: 'application/json' },
       },
-    ],
-    config: { responseMimeType: 'application/json', abortSignal: signal },
-  })
-  const text = (response.candidates?.[0]?.content?.parts ?? [])
-    .map((p) => (typeof p.text === 'string' ? p.text : ''))
-    .join('')
+      { signal },
+    )
+    text = interactionText(interaction)
+    if (!text.trim()) throw new Error('the model gave no answer')
+  } catch (first) {
+    if (signal.aborted) throw first
+    // Models that are only served the older way
+    try {
+      const response = await ai.models.generateContent({
+        model: modelId,
+        contents: [
+          {
+            role: 'user',
+            parts: [
+              { inlineData: { mimeType: plain.mimeType, data: plain.base64 } },
+              { inlineData: { mimeType: guide.mimeType, data: guide.base64 } },
+              { text: prompt },
+            ],
+          },
+        ],
+        config: { responseMimeType: 'application/json', abortSignal: signal },
+      })
+      text = (response.candidates?.[0]?.content?.parts ?? [])
+        .map((p) => (typeof p.text === 'string' ? p.text : ''))
+        .join('')
+    } catch {
+      // Neither way worked: the first failure is the one worth reporting
+      throw first
+    }
+  }
   return parseLocated(text, marks.length)
+}
+
+// The answer's text: as the SDK sums it up, or read from the answer's own
+// parts (whose layout has changed between revisions of the API)
+function interactionText(interaction: unknown): string {
+  if (!isRecord(interaction)) return ''
+  if (typeof interaction.output_text === 'string' && interaction.output_text.trim()) return interaction.output_text
+  const texts: string[] = []
+  const collect = (content: unknown) => {
+    if (!Array.isArray(content)) return
+    for (const item of content) if (isRecord(item) && item.type === 'text' && typeof item.text === 'string') texts.push(item.text)
+  }
+  collect(interaction.outputs)
+  if (Array.isArray(interaction.steps))
+    for (const step of interaction.steps) if (isRecord(step) && step.type !== 'user_input') collect(step.content)
+  return texts.join('')
 }
 
 function locatePrompt(marks: EditMark[]): string {
@@ -100,16 +147,24 @@ export function parseLocated(text: string, arrows: number): Located {
   return { extents, labels, guarded }
 }
 
+// The JSON in an answer: as it is, inside a ``` fence, or with words around it
 function parseJson(text: string): unknown {
   const trimmed = text
     .trim()
     .replace(/^```(?:json)?\s*/i, '')
     .replace(/```\s*$/, '')
-  try {
-    return JSON.parse(trimmed)
-  } catch {
-    throw new Error('the answer was not readable')
+  const candidates = [trimmed]
+  const from = trimmed.indexOf('{')
+  const to = trimmed.lastIndexOf('}')
+  if (from >= 0 && to > from) candidates.push(trimmed.slice(from, to + 1))
+  for (const candidate of candidates) {
+    try {
+      return JSON.parse(candidate)
+    } catch {
+      // try the next reading
+    }
   }
+  throw new Error('the answer was not readable')
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

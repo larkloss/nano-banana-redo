@@ -23,15 +23,24 @@ const text = (t) => JSON.stringify({ candidates: [{ content: { parts: [{ text: t
 let pass = 0, fail = 0
 const check = (name, ok, detail = '') => { console.log((ok ? 'PASS ' : 'FAIL ') + name + (detail ? ' — ' + detail : '')); ok ? pass++ : fail++ }
 
-async function open(browser, kase, { locator } = {}) {
+async function open(browser, kase, { locator, oldWayOnly } = {}) {
   const p = await browser.newPage({ viewport: { width: 1440, height: 950 } })
   const errors = []; p.on('pageerror', (e) => errors.push(e.message)); p.on('console', (m) => m.type() === 'error' && errors.push(m.text()))
-  const calls = { image: 0, locate: 0, locateBodies: [] }
+  const calls = { image: 0, locate: 0, locateOld: 0, locateBodies: [] }
   await p.route('https://generativelanguage.googleapis.com/**', async (route) => {
     const url = route.request().url()
-    if (/gemini-4-carbon|my-locator/.test(url)) {
+    // "Find the object" asks through the Interactions API first, and the older
+    // generateContent way if that fails
+    const body = route.request().postDataJSON()
+    if (/\/interactions$/.test(url)) {
       calls.locate++
-      calls.locateBodies.push(route.request().postDataJSON())
+      calls.locateBodies.push(body)
+      if (locator === 'error' || oldWayOnly)
+        return route.fulfill({ status: oldWayOnly ? 404 : 500, contentType: 'application/json', body: JSON.stringify({ error: { code: 500, message: 'backend unavailable' } }) })
+      return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ id: 'i1', status: 'completed', steps: [{ type: 'model_output', content: [{ type: 'text', text: locator }] }] }) })
+    }
+    if (/gemini-4-hydrogen|gemini-4-carbon/.test(url)) {
+      calls.locateOld++
       if (locator === 'error') return route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: { code: 500, message: 'backend unavailable' } }) })
       return route.fulfill({ contentType: 'application/json', body: text(locator) })
     }
@@ -171,13 +180,14 @@ async function disturbed(p, before, after, discs) {
     const box = p.locator('[role=dialog] label:has-text("find the object") input')
     check('"find the object" is off to begin with', !(await box.isChecked()))
     await box.check()
-    check('model field shows the default', (await p.locator('[role=dialog] input[aria-label="Gemini model that finds the object"]').getAttribute('placeholder')) === 'gemini-4-carbon')
+    check('model field shows the default', (await p.locator('[role=dialog] input[aria-label="Gemini model that finds the object"]').getAttribute('placeholder')) === 'gemini-4-hydrogen')
     await shot(p, '3-find-switch.png')
     await p.click('[role=dialog] button:has-text("Apply edit")')
     await p.waitForFunction(() => /Done in|Done on|Gave up|went wrong|Stopped/.test(document.querySelector('[role=dialog]').innerText), null, { timeout: 90000 })
     const txt = await p.evaluate(() => document.querySelector('[role=dialog]').innerText)
     check('with it the edit is done', /Done/.test(txt), (txt.match(/Done[^\n]*|Gave up[^\n]*/) || [''])[0].slice(0, 80))
-    check('one locator request, with two pictures and the instruction', calls.locate === 1 && calls.locateBodies[0].contents[0].parts.filter((x) => x.inlineData).length === 2 && /remove this/.test(JSON.stringify(calls.locateBodies[0])), 'calls ' + calls.locate)
+    const sent = calls.locateBodies[0] || {}
+    check('one locator request (Interactions API), with two pictures and the instruction', calls.locate === 1 && calls.locateOld === 0 && sent.model === 'gemini-4-hydrogen' && sent.input.filter((x) => x.type === 'image').length === 2 && /remove this/.test(JSON.stringify(sent.input)), `calls ${calls.locate}+${calls.locateOld}, model ${sent.model}`)
     check('the note says what was found', /Found: left arm \(1\) · 1 face left alone/.test(txt), (txt.match(/Found:[^\n]*/) || ['(none)'])[0])
     const d = await diff(p, 'Original', 'Version 1')
     check('a large part of the limb was taken', d.changedPct > 5, d.changedPct + '% of the picture')
@@ -194,6 +204,21 @@ async function disturbed(p, before, after, discs) {
     await p.close()
   }
   {
+    // a model only served the older way, and a model id typed by the user
+    const located = JSON.stringify({ objects: [{ arrow: 1, label: 'arm', box_2d: [390, 190, 1000, 520] }], faces: [] })
+    const { p, calls, errors } = await open(browser, kase, { locator: 'Here you go: ' + located, oldWayOnly: true })
+    await clickAt(p, m.marks[0].x, m.marks[0].y)
+    await p.keyboard.type('remove this')
+    await p.locator('[role=dialog] label:has-text("find the object") input').check()
+    await p.fill('[role=dialog] input[aria-label="Gemini model that finds the object"]', 'gemini-4-carbon')
+    await p.click('[role=dialog] button:has-text("Apply edit")')
+    await p.waitForFunction(() => /Done in|Done on|Gave up|went wrong|Stopped/.test(document.querySelector('[role=dialog]').innerText), null, { timeout: 90000 })
+    const txt = await p.evaluate(() => document.querySelector('[role=dialog]').innerText)
+    check('falls back to the older request when the Interactions API refuses, with the typed model', /Done/.test(txt) && calls.locate === 1 && calls.locateOld === 1 && calls.locateBodies[0].model === 'gemini-4-carbon' && /Found: arm \(1\)/.test(txt), `calls ${calls.locate}+${calls.locateOld}, ${(txt.match(/Found:[^\n]*/) || ['(no note)'])[0]}`)
+    check('no page errors beyond the refused request', errors.filter((e) => !/404/.test(e)).length === 0, errors.join(' | '))
+    await p.close()
+  }
+  {
     // the locator fails: the edit goes on as it would without (here: not usable), with a note
     const { p, calls, errors } = await open(browser, kase, { locator: 'error' })
     await clickAt(p, m.marks[0].x, m.marks[0].y)
@@ -203,7 +228,7 @@ async function disturbed(p, before, after, discs) {
     await p.waitForFunction(() => /Done in|Done on|Gave up|went wrong|Stopped/.test(document.querySelector('[role=dialog]').innerText), null, { timeout: 120000 })
     const txt = await p.evaluate(() => document.querySelector('[role=dialog]').innerText)
     check('a failed locator does not fail the edit by itself, and says why', /Gave up/.test(txt) && /didn’t get an answer \(backend unavailable\)/.test(txt), (txt.match(/“Find the object”[^\n]*/) || ['(no note)'])[0].slice(0, 110))
-    console.log('     locator calls:', calls.locate, '| image calls:', calls.image, '| errors:', errors.filter((e) => !/500/.test(e)))
+    console.log('     locator calls:', calls.locate, '+', calls.locateOld, '| image calls:', calls.image, '| errors:', errors.filter((e) => !/500/.test(e)))
     await p.close()
   }
   await browser.close()
