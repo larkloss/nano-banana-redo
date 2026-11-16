@@ -195,16 +195,19 @@ def smooth_photo(img, sigma, seed):
     return np.clip(sm + rng.normal(0, 1.5, sm.shape), 0, 255).astype(np.float32)
 
 
-def add_limb(base, m, lift, shade, contour, width, shift=(0, 0)):
-    """A limb-like object of the same material as what it lies on (an arm across a
-    torso): the picture's own content from `shift` px away (so it hides what is under
-    it), `lift` levels brighter, shaded like a rounded form, with a dark contour `width`
-    px wide and a soft drop shadow. Inside, old and new look alike; what differs
-    clearly is the outline. Returns the picture with it and where it is."""
+def add_limb(base, m, lift, shade, contour, width, shift=(0, 0), flat=0):
+    """A limb-like object of the same colour as what it lies on (an arm across a
+    torso): the picture's own content — from `shift` px away, and with `flat` > 0
+    smoothed over that many px, so that it hides the detail under it like plain skin
+    does — `lift` levels brighter, shaded like a rounded form, with a dark contour
+    `width` px wide and a soft drop shadow. Inside, old and new look alike; what
+    differs clearly is the outline. Returns the picture with it and where it is."""
     soft = ndimage.gaussian_filter(m.astype(np.float32), 1.0)
     depth = ndimage.distance_transform_edt(m)
     depth = depth / max(1.0, depth.max())
     material = np.roll(np.roll(base, int(shift[1]), 0), int(shift[0]), 1)
+    if flat:
+        material = np.stack([ndimage.gaussian_filter(material[..., c], flat) for c in range(3)], -1)
     obj = np.clip(material * (1 - shade + 2 * shade * np.sqrt(depth))[..., None] + lift, 0, 255)
     rim = ndimage.gaussian_filter((m ^ ndimage.binary_erosion(m, iterations=max(1, width))).astype(np.float32), 0.8 * width)
     rim = np.clip(rim * 2.0, 0, 1) * contour
@@ -285,16 +288,20 @@ SCENARIOS = [
     dict(id='S-arm-thin-line', photo='astronaut.png', scale=2, smooth=14, levels=['mild'], expect='any', left_max=100,
          objects=[(('ellipse', 180, 360, 30, 95, 30), dict(lift=10, shade=0.02, contour=0.35, width=1))], arrows=[(180, 360)], protect=[FACE_A]),
     # With the thing's extent known (the "find the object" switch) all of it
-    # is taken: the faint inside, the outline, even a hairline one
+    # is taken: the faint inside, the outline, even a hairline one.
+    # (These limbs are see-through in effect — the same content, a little
+    # brighter — so where the photo's detail still shows under them the "still
+    # there" brake reads them as re-toned and stands the extent down; hence the
+    # stronger smoothing for the large ones. A real limb hides what is under it.)
     dict(id='S-arm-found', photo='astronaut.png', scale=2, smooth=14, found=True,
          objects=[(('ellipse', 180, 360, 30, 95, 30), dict(lift=10, shade=0.05, contour=0.35, width=3))], arrows=[(180, 360)], protect=[FACE_A]),
-    dict(id='S-arm-large-found', photo='astronaut.png', scale=2, smooth=14, found=True,
+    dict(id='S-arm-large-found', photo='astronaut.png', scale=2, smooth=20, found=True,
          objects=[(('ellipse', 180, 360, 45, 150, 30), dict(lift=10, shade=0.05, contour=0.35, width=3))], arrows=[(180, 360)], protect=[FACE_A]),
     dict(id='S-arm-thin-line-found', photo='astronaut.png', scale=2, smooth=14, levels=['mild'], found=True,
          objects=[(('ellipse', 180, 360, 30, 95, 30), dict(lift=10, shade=0.02, contour=0.35, width=1))], arrows=[(180, 360)], protect=[FACE_A]),
     # … also one that differs from what is behind it by its outline alone,
     # with nothing changed where the arrow points
-    dict(id='S-arm-outline-only-found', photo='astronaut.png', scale=2, smooth=14, levels=['mild'], found=True,
+    dict(id='S-arm-outline-only-found', photo='astronaut.png', scale=2, smooth=20, levels=['mild'], found=True,
          objects=[(('ellipse', 180, 360, 45, 150, 30), dict(lift=0, shade=0.02, contour=0.35, width=3))], arrows=[(180, 360)], protect=[FACE_A]),
     # An extent that takes in a face (the box of a hood includes the head):
     # the face is guarded and must stay
@@ -304,6 +311,10 @@ SCENARIOS = [
     # to be still there and the extent is not used
     dict(id='A-hood-ring-found-unguarded', photo='astronaut.png', scale=2, found=True,
          edits=[('recolor', ('ring', 225, 118, 98, 110, 60, 76))], arrows=[(225, 18)], protect=[('ellipse', 225, 124, 40, 52)]),
+    # An arrow pointing at something inside a guarded area (an earring within
+    # the box given for the face): that thing is still edited, in full
+    dict(id='A-earring-in-guard', photo='astronaut.png', scale=2, guard_boxes=[(120, 60, 290, 195)],
+         edits=[('blob', ('ellipse', 162, 143, 8, 8))], arrows=[(162, 143)], protect=[('ellipse', 228, 124, 42, 56)]),
     # What the automatic part left behind, taken by the user's touch-ups
     dict(id='C-remove-spoon-touched', photo='coffee.png', scale=1.5, levels=['mild'],
          edits=[('fill', ('union', [('ellipse', 365, 288, 40, 44, 0), ('ellipse', 398, 170, 13, 100, -8)]))],
@@ -346,7 +357,7 @@ def build(sc, level, seed):
     gt = np.zeros((H, W), np.float32)
     for spec, look in sc.get('objects', []):
         O, where = add_limb(O, shape_mask(H, W, spec, s), look['lift'], look['shade'], look['contour'], look['width'],
-                            [v * s for v in look.get('shift', (0, 0))])
+                            [v * s for v in look.get('shift', (0, 0))], look.get('flat', 0) * s)
         gt = np.maximum(gt, where)
     for kind, spec in sc.get('edits', []):
         m = shape_mask(H, W, spec, s)
@@ -382,6 +393,9 @@ def build(sc, level, seed):
         for spec in sc.get('protect', []):
             ys, xs = np.nonzero(shape_mask(H, W, spec, s))
             options['guarded'].append(dict(x0=xs.min() / W, y0=ys.min() / H, x1=(xs.max() + 1) / W, y1=(ys.max() + 1) / H))
+    if sc.get('guard_boxes'):
+        options.setdefault('guarded', []).extend(
+            dict(x0=x0 * s / W, y0=y0 * s / H, x1=x1 * s / W, y1=y1 * s / H) for x0, y0, x1, y1 in sc['guard_boxes'])
     if sc.get('touches'):
         options['touches'] = [dict(x=x * s / W, y=y * s / H, r=r * s / min(W, H), take=take) for x, y, r, take in sc['touches']]
     if options:

@@ -31,6 +31,7 @@ export interface Located {
 const LOCATE_MAX_EDGE = 1280
 // The edit doesn't wait longer than this for the answer
 const LOCATE_TIMEOUT_MS = 45_000
+const MAX_FACES = 64
 
 export async function locateObjects(
   apiKey: string,
@@ -184,11 +185,14 @@ export function parseLocated(text: string, arrows: number): Located {
     extents[index] = mask ? { box, mask } : { box }
     labels[index] = typeof entry.label === 'string' && entry.label.trim() ? entry.label.trim().slice(0, 40) : null
   }
-  const faces = isRecord(raw) && Array.isArray(raw.faces) ? raw.faces : []
-  const guarded = faces
-    .map((f) => (Array.isArray(f) ? toArea(f) : isRecord(f) ? toArea(f.box_2d) : null))
-    .filter((a): a is Area => a !== null)
-    .slice(0, 12)
+  // Every face listed has to be readable: one that isn't would go unguarded
+  const guarded: Area[] = []
+  if (raw.faces.length > MAX_FACES) throw new Error('the answer listed more faces than can be told apart')
+  for (const f of raw.faces) {
+    const area = Array.isArray(f) ? toArea(f) : isRecord(f) ? toArea(f.box_2d) : null
+    if (!area) throw new Error('the answer didn’t say where one of the faces is')
+    guarded.push(area)
+  }
   return { extents, labels, guarded }
 }
 
