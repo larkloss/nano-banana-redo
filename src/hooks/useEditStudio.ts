@@ -8,7 +8,8 @@ import { isMockMode } from '../lib/mockGemini'
 import { MAX_XAI_SOURCES } from '../lib/xai'
 import { MAX_OPENAI_SOURCES } from '../lib/openai'
 import { buildEditPrompt, buildSingleSourcePrompt, renderGuide, summarizeEdit, type EditMark } from '../lib/annotate'
-import type { LocalEditInfo } from '../lib/localEdit'
+import type { Area, LocalEditInfo, LocalEditOptions, Touch } from '../lib/localEdit'
+import { locateObjects } from '../lib/locate'
 import { createLocalEditor, makeLocalEditCaller, type Framing, type LocalEditor } from '../lib/localEditClient'
 import { base64ToBlob, processImagePart } from '../lib/imageUtils'
 import { blobToBase64 } from '../edit/lib/mask'
@@ -23,17 +24,31 @@ export interface EditVersion {
   image: GeneratedImage
   // The turn that produced it; null for the original
   turnId: string | null
-  // Made from another version (its model's whole picture), not a new answer
+  // Made from another version (its model's whole picture, or the same answer
+  // cut out again with the user's touch-ups), not a new answer
   derived?: boolean
   derivedFrom?: string
+  recut?: boolean
   // For "only around the arrows" edits: the model's own whole-picture answer
   // (before everything away from the arrows was put back), the area that was
-  // taken from it, and what the change detection found
+  // taken from it, what the change detection found, and what it was given to
+  // go by (found objects, touch-ups) — enough to cut it out again
   local?: {
     whole: { blob: Blob; objectUrl: string }
     areaUrl: string
     info: LocalEditInfo
+    options: LocalEditOptions
   }
+}
+
+// What "find the object" came back with for a turn
+export interface FoundObjects {
+  // Per arrow: what the thing was called and where it is (null: not found)
+  labels: (string | null)[]
+  boxes: (Area | null)[]
+  faces: Area[]
+  // Why nothing was found, when the question itself failed
+  problem: string | null
 }
 
 export type TurnStatus = Exclude<RunStatus, 'idle'>
@@ -50,6 +65,10 @@ export interface EditTurn {
   withReferences: boolean
   // Keep everything away from the arrows exactly as it was
   localOnly: boolean
+  // … after asking a Gemini model where the things the arrows point at are
+  findObject: boolean
+  locatorModel: string
+  found?: FoundObjects
   candidates: number
   modelId: string
   status: TurnStatus
@@ -74,6 +93,8 @@ export interface EditRequest {
   withReferences: boolean
   // Keep everything away from the arrows exactly as it was
   localOnly: boolean
+  findObject: boolean
+  locatorModel: string
   modelId: string
 }
 
@@ -99,7 +120,11 @@ export function useEditStudio({ settings, references, onResult }: Options) {
   // stop pressed in that window cancels the edit before any request is sent.
   const [preparing, setPreparing] = useState(false)
   const cancelledRef = useRef(false)
-  const busy = run.isRunning || preparing
+  // The "find the object" question of the edit being prepared (Stop ends it)
+  const locating = useRef<AbortController | null>(null)
+  // A result being cut out again with touch-ups (no request involved)
+  const [recutting, setRecutting] = useState(false)
+  const busy = run.isRunning || preparing || recutting
 
   const patchSession = useCallback((sessionId: string, patch: (s: EditSession) => EditSession) => {
     setSessions((prev) => (prev[sessionId] ? { ...prev, [sessionId]: patch(prev[sessionId]) } : prev))
@@ -182,6 +207,27 @@ export function useEditStudio({ settings, references, onResult }: Options) {
       try {
         if (local) job = await createLocalEditor(source.image.blob, turn.marks)
         const localJob = job
+        if (localJob && turn.findObject) {
+          // (stopped while the picture was being read: nothing is sent)
+          if (cancelledRef.current) throw new StoppedBeforeStart()
+          const abort = new AbortController()
+          locating.current = abort
+          const found = await findObjects(source.image.blob, turn, abort.signal)
+          locating.current = null
+          if (cancelledRef.current) throw new StoppedBeforeStart()
+          localJob.options = {
+            extents: found.extents,
+            guarded: found.faces,
+          }
+          finishTurn({
+            found: {
+              labels: found.labels,
+              boxes: found.extents.map((e) => e?.box ?? null),
+              faces: found.faces,
+              problem: found.problem,
+            },
+          })
+        }
         // What is sent. A picture in a shape the model can't answer in (most
         // uploads) goes inside a frame of a shape it can, with the arrows
         // moved to match, and is cut back out of the answer.
@@ -276,6 +322,7 @@ export function useEditStudio({ settings, references, onResult }: Options) {
                       whole: { blob: wholeBlob, objectUrl: URL.createObjectURL(wholeBlob) },
                       areaUrl: URL.createObjectURL(extra.mask),
                       info: extra.info,
+                      options: localJob?.options ?? {},
                     },
                   }
                 : {}),
@@ -354,6 +401,8 @@ export function useEditStudio({ settings, references, onResult }: Options) {
         sourceVersionId: session.selectedVersionId,
         withReferences: request.withReferences,
         localOnly: request.localOnly,
+        findObject: request.findObject && request.localOnly && marks.length > 0,
+        locatorModel: request.locatorModel,
         candidates: request.candidates,
         modelId: request.modelId,
         status: 'running',
@@ -376,6 +425,7 @@ export function useEditStudio({ settings, references, onResult }: Options) {
         ...turn,
         id: crypto.randomUUID(),
         guideUrl: null,
+        found: undefined,
         status: 'running',
         resultVersionIds: [],
         attempts: 0,
@@ -384,6 +434,78 @@ export function useEditStudio({ settings, references, onResult }: Options) {
       })
     },
     [sessions, busy, runTurn],
+  )
+
+  // Cuts an "only around the arrows" result out of the same answer again,
+  // with spots the user picked: taken from the model here, the original put
+  // back there. No request is made. Adds a new version; resolves to what went
+  // wrong, if anything.
+  const recut = useCallback(
+    async (sessionId: string, versionId: string, touches: Touch[]): Promise<string | null> => {
+      const session = sessions[sessionId]
+      const version = session?.versions.find((v) => v.id === versionId)
+      const turn = session?.turns.find((t) => t.id === version?.turnId)
+      const source = session?.versions.find((v) => v.id === turn?.sourceVersionId)
+      if (!session || !version?.local || !turn || !source || touches.length === 0) return null
+      if (busyRef.current) return 'Wait for the edit that is running to finish.'
+      busyRef.current = true
+      setRecutting(true)
+      let editor: LocalEditor | null = null
+      try {
+        editor = await createLocalEditor(source.image.blob, turn.marks)
+        const options: LocalEditOptions = {
+          ...version.local.options,
+          touches: [...(version.local.options.touches ?? []), ...touches],
+        }
+        const outcome = await editor.compose(version.local.whole.blob, options)
+        if (outcome.kind === 'reject') return 'That left nothing of the edit — the picture would just be the one before it.'
+        const image = await processImagePart(
+          { base64: await blobToBase64(outcome.blob), mimeType: 'image/png' },
+          'png',
+          { attempt: version.image.attempt, modelId: version.image.modelId },
+        )
+        const number = versionCounters.current[sessionId] ?? 1
+        versionCounters.current[sessionId] = number + 1
+        const prompt = (version.image.edit?.prompt ?? '').replace(/ \(touched up\)$/, '')
+        const tagged: GeneratedImage = {
+          ...image,
+          edit: { sessionId, version: number, prompt: `${prompt} (touched up)` },
+          ...(settings.format !== image.format ? { saveAs: settings.format } : {}),
+        }
+        const added: EditVersion = {
+          id: crypto.randomUUID(),
+          number,
+          image: tagged,
+          turnId: version.turnId,
+          derived: true,
+          derivedFrom: version.id,
+          recut: true,
+          local: {
+            whole: version.local.whole,
+            areaUrl: URL.createObjectURL(outcome.mask),
+            info: outcome.info,
+            options,
+          },
+        }
+        onResult(tagged)
+        patchSession(sessionId, (s) => ({
+          ...s,
+          versions: [...s.versions, added],
+          turns: s.turns.map((t) =>
+            t.id === version.turnId ? { ...t, resultVersionIds: [...t.resultVersionIds, added.id] } : t,
+          ),
+          selectedVersionId: added.id,
+        }))
+        return null
+      } catch (err) {
+        return err instanceof Error ? err.message : String(err)
+      } finally {
+        editor?.release()
+        busyRef.current = false
+        setRecutting(false)
+      }
+    },
+    [sessions, settings.format, onResult, patchSession],
   )
 
   // Swaps an "only around the arrows" result for the model's own whole
@@ -439,6 +561,7 @@ export function useEditStudio({ settings, references, onResult }: Options) {
   // before anything is sent; afterwards it aborts the engine as usual
   const stop = useCallback(() => {
     cancelledRef.current = true
+    locating.current?.abort()
     run.stop()
   }, [run])
 
@@ -454,6 +577,8 @@ export function useEditStudio({ settings, references, onResult }: Options) {
       submit,
       retry,
       takeWholePicture,
+      recut,
+      isRecutting: recutting,
       stop,
       // While preparing, the engine's state still belongs to the last run
       runState: preparing ? null : run.runState,
@@ -469,6 +594,8 @@ export function useEditStudio({ settings, references, onResult }: Options) {
       submit,
       retry,
       takeWholePicture,
+      recut,
+      recutting,
       stop,
       preparing,
       run.runState,
@@ -476,6 +603,39 @@ export function useEditStudio({ settings, references, onResult }: Options) {
       runningTurn,
     ],
   )
+}
+
+// Asks where the things the arrows point at are. Never fails the edit: any
+// problem comes back as a note, and the edit goes on as it would without.
+async function findObjects(
+  picture: Blob,
+  turn: EditTurn,
+  signal: AbortSignal,
+): Promise<{
+  extents: NonNullable<LocalEditOptions['extents']>
+  labels: (string | null)[]
+  faces: Area[]
+  problem: string | null
+}> {
+  const none = (problem: string) => ({
+    extents: turn.marks.map(() => null),
+    labels: turn.marks.map(() => null),
+    faces: [],
+    problem,
+  })
+  const key = loadApiKeys('gemini').find(Boolean) ?? (isMockMode() ? 'mock' : '')
+  if (!key) return none('no Google AI Studio key is saved')
+  try {
+    const located = await locateObjects(key, turn.locatorModel, picture, turn.marks, signal)
+    return { extents: located.extents, labels: located.labels, faces: located.guarded, problem: null }
+  } catch (err) {
+    if (signal.aborted) return none('stopped')
+    // The SDK reports API errors as the response's JSON: say what it says
+    let message = err instanceof Error ? err.message : String(err)
+    const inner = /"message"\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(message)
+    if (inner) message = inner[1].replace(/\\(.)/g, '$1')
+    return none(message.length > 140 ? `${message.slice(0, 140)}…` : message)
+  }
 }
 
 function missingKeyMessage(provider: string): string {

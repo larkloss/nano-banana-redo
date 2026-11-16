@@ -7,7 +7,11 @@ import { downloadImage, saveFormat, sourceLabel } from '../../lib/imageUtils'
 import { friendlyReason } from '../../lib/friendly'
 import { MAX_MARKS, markColor, summarizeEdit, type EditMark } from '../../lib/annotate'
 import { mentionedNumbers } from '../../lib/mentions'
-import { MarkedImage } from './MarkedImage'
+import type { Touch } from '../../lib/localEdit'
+import { DEFAULT_LOCATOR_MODEL, LOCATOR_MODELS } from '../../lib/locate'
+import { loadApiKeys, loadStudioPrefs, saveStudioPrefs } from '../../lib/storage'
+import { isMockMode } from '../../lib/mockGemini'
+import { MarkedImage, type FoundBox } from './MarkedImage'
 import { MarkList } from './MarkList'
 
 interface Props {
@@ -23,11 +27,21 @@ interface Props {
   onRetry: (turnId: string) => void
   // Replace an "only around the arrows" result with the model's whole picture
   onUseWhole: (versionId: string) => void
+  // Cut the same answer out again with spots the user picked (no request);
+  // resolves to what went wrong, if anything
+  onRecut: (versionId: string, touches: Touch[]) => Promise<string | null>
+  isRecutting: boolean
   onStop: () => void
   onClose: () => void
 }
 
 const IMAGE_MODELS = MODELS.filter((m) => m.output === 'image')
+// Touch-up spot sizes, as a share of the picture's shorter side
+const TOUCH_SIZES = [
+  { label: 'S', r: 0.035 },
+  { label: 'M', r: 0.07 },
+  { label: 'L', r: 0.12 },
+]
 const SUGGESTIONS = [
   'Change the background to a sunny park',
   'Make the lighting warmer and softer',
@@ -47,6 +61,8 @@ export function EditStudio({
   onSubmit,
   onRetry,
   onUseWhole,
+  onRecut,
+  isRecutting,
   onStop,
   onClose,
 }: Props) {
@@ -66,6 +82,24 @@ export function EditStudio({
   // are relative, so they survive switching between versions of the picture.
   const [marks, setMarks] = useState<EditMark[]>([])
   const [activeMark, setActiveMark] = useState<string | null>(null)
+  // "Find the object": ask a Gemini model where the things the arrows point
+  // at are, so that all of each is taken (a standing choice, off to begin with)
+  const [prefs, setPrefs] = useState(loadStudioPrefs)
+  const updatePrefs = (patch: Partial<typeof prefs>) => {
+    const next = { ...prefs, ...patch }
+    setPrefs(next)
+    saveStudioPrefs(next)
+  }
+  const hasGoogleKey = loadApiKeys('gemini').some(Boolean) || isMockMode()
+  // Touching up the version on screen: spots picked since "Touch up" was pressed
+  // (it belongs to that version: showing another one ends it)
+  const [touchUp, setTouching] = useState<{
+    versionId: string
+    take: boolean
+    size: number
+    picked: Touch[]
+  } | null>(null)
+  const [touchNote, setTouchNote] = useState<string | null>(null)
   const threadEnd = useRef<HTMLDivElement>(null)
   const pressedBackdrop = useRef(false)
 
@@ -86,9 +120,43 @@ export function EditStudio({
   // (not all of them fit beside the picture and the arrow guide on every model)
   const referencesSent = Math.min(referenceCount, studioReferenceSlots(modelId, marks.length > 0))
   const unsentMentions = mentioned.filter((n) => !sendingReferences || n > referencesSent)
-  const wholeAlreadyTaken = session.versions.some((v) => v.derivedFrom === selected.id)
+  // One answer's whole picture is added once, whichever cut of it is on screen
+  const wholeAlreadyTaken = session.versions.some((v) => {
+    if (!v.derived || v.recut || !v.derivedFrom) return false
+    if (v.derivedFrom === selected.id) return true
+    const from = session.versions.find((o) => o.id === v.derivedFrom)
+    return Boolean(from?.local && selected.local && from.local.whole.blob === selected.local.whole.blob)
+  })
+  // Touching up belongs to the version it was started on: showing another
+  // one ends it (it doesn't come back, spots and all, later)
+  const [shownId, setShownId] = useState(selected.id)
+  if (shownId !== selected.id) {
+    setShownId(selected.id)
+    setTouching(null)
+    setTouchNote(null)
+  }
+  const touching = touchUp && touchUp.versionId === selected.id && selected.local ? touchUp : null
+  // What "find the object" saw for the edit that made this version
+  const found = selectedTurn?.found
+  // (only the areas this version's cut actually went by)
+  const used = selected.local?.info.extentsUsed
+  const foundBoxes: FoundBox[] = found
+    ? [
+        ...found.boxes.flatMap((area, i): FoundBox[] =>
+          area && used?.[i] ? [{ area, kind: 'object', label: found.labels[i] ?? `arrow ${i + 1}` }] : [],
+        ),
+        ...found.faces.map((area): FoundBox => ({ area, kind: 'face' })),
+      ]
+    : []
+  const touchable = Boolean(selected.local) && !isRunning
+  const applyTouches = async () => {
+    if (!touching || touching.picked.length === 0) return
+    const problem = await onRecut(selected.id, touching.picked)
+    setTouchNote(problem)
+    if (!problem) setTouching(null)
+  }
   const busyHere = isRunning && runningTurn?.sessionId === session.id
-  const busyElsewhere = isRunning && !busyHere
+  const busyElsewhere = isRunning && !busyHere && !isRecutting
   const marksReady = marks.every((m) => m.text.trim().length > 0)
   const canSend = !isRunning && marksReady && (prompt.trim().length > 0 || marks.length > 0)
 
@@ -103,11 +171,16 @@ export function EditStudio({
       // the studio and throw away what's been marked and written
       const t = e.target
       if (t instanceof HTMLTextAreaElement || t instanceof HTMLInputElement) return
+      // … and in touch-up mode it leaves that mode, not the studio
+      if (touchUp) {
+        if (!isRecutting) setTouching(null)
+        return
+      }
       onClose()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
+  }, [onClose, touchUp, isRecutting])
 
   const send = () => {
     if (!canSend) return
@@ -118,7 +191,10 @@ export function EditStudio({
       withReferences: withReferences && referenceCount > 0,
       modelId,
       localOnly: localOnly && marks.length > 0,
+      findObject: prefs.findObject && hasGoogleKey,
+      locatorModel: prefs.locatorModel || DEFAULT_LOCATOR_MODEL,
     })
+    setTouching(null)
     setPrompt('')
     setMarks([])
     setActiveMark(null)
@@ -146,7 +222,8 @@ export function EditStudio({
         pressedBackdrop.current = e.target === e.currentTarget
       }}
       onClick={(e) => {
-        if (pressedBackdrop.current && e.target === e.currentTarget) onClose()
+        // (not while spots are picked: a stray click must not throw them away)
+        if (pressedBackdrop.current && e.target === e.currentTarget && !touching?.picked.length) onClose()
       }}
     >
       <div
@@ -204,17 +281,39 @@ export function EditStudio({
               <MarkedImage
                 src={shownUrl}
                 alt={versionLabel(shown)}
-                marks={marks}
+                marks={touching ? [] : marks}
                 activeId={activeMark}
                 interactive={!comparing}
-                overlayUrl={peek === 'area' ? selected.local?.areaUrl : null}
+                overlayUrl={peek === 'area' || (touching && !comparing) ? selected.local?.areaUrl : null}
+                boxes={peek === 'area' || (touching && !comparing) ? foundBoxes : undefined}
+                touchUp={
+                  touching && selected.local && !comparing
+                    ? {
+                        applied: selected.local.options.touches ?? [],
+                        pending: touching.picked,
+                        size: touching.size,
+                        take: touching.take,
+                        onAdd: (x, y) => {
+                          // (not while the last ones are being applied)
+                          if (isRecutting) return
+                          setTouching((t) =>
+                            t ? { ...t, picked: [...t.picked, { x, y, r: t.size, take: t.take }] } : t,
+                          )
+                        },
+                      }
+                    : null
+                }
                 onAdd={addMark}
                 onMove={(id, x, y) => updateMark(id, { x, y })}
                 onActivate={setActiveMark}
               />
               {!comparing && (
                 <span className="pointer-events-none absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full bg-black/60 px-3 py-1 text-[11px] text-white">
-                  {marks.length === 0
+                  {touching
+                    ? touching.take
+                      ? 'Pink = taken from the model · click where part of the edit was left behind'
+                      : 'Pink = taken from the model · click what should go back to your original'
+                    : marks.length === 0
                     ? '👆 Click the picture to point at what to change'
                     : marks.length >= MAX_MARKS
                       ? `That's ${MAX_MARKS} arrows — the most one edit takes`
@@ -228,7 +327,9 @@ export function EditStudio({
                     ? 'The model’s whole picture'
                     : peek === 'area'
                       ? 'Replaced area'
-                      : versionLabel(selected)}
+                      : touching
+                        ? `Touching up ${versionLabel(selected)}`
+                        : versionLabel(selected)}
               </span>
               {busyHere && (
                 <span className="absolute right-3 top-3 flex items-center gap-1.5 rounded-full bg-black/60 px-2.5 py-1 text-[11px] text-white">
@@ -236,6 +337,77 @@ export function EditStudio({
                 </span>
               )}
             </div>
+            {touching && selected.local && (
+              <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-zinc-700 bg-zinc-900 px-3 py-2 text-[11px] text-zinc-300">
+                <div className="flex items-center gap-1 rounded-full bg-zinc-950 p-0.5">
+                  <button
+                    type="button"
+                    onClick={() => setTouching({ ...touching, take: true })}
+                    title="Click a spot where part of the edit was left behind: everything the model drew there is taken"
+                    className={`rounded-full px-2.5 py-1 ${touching.take ? 'bg-emerald-600 font-semibold text-white' : 'text-zinc-400 hover:text-zinc-200'}`}
+                  >
+                    + Take from the model
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setTouching({ ...touching, take: false })}
+                    title="Click a spot the edit should not have touched: your original is put back there"
+                    className={`rounded-full px-2.5 py-1 ${!touching.take ? 'bg-amber-600 font-semibold text-white' : 'text-zinc-400 hover:text-zinc-200'}`}
+                  >
+                    − Put the original back
+                  </button>
+                </div>
+                <div className="flex items-center gap-1 rounded-full bg-zinc-950 p-0.5" title="Size of each spot">
+                  {TOUCH_SIZES.map((size) => (
+                    <button
+                      key={size.label}
+                      type="button"
+                      onClick={() => setTouching({ ...touching, size: size.r })}
+                      className={`h-6 min-w-6 rounded-full px-1.5 ${
+                        touching.size === size.r ? 'bg-blue-600 font-semibold text-white' : 'text-zinc-500 hover:text-zinc-300'
+                      }`}
+                    >
+                      {size.label}
+                    </button>
+                  ))}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setTouching({ ...touching, picked: touching.picked.slice(0, -1) })}
+                  disabled={touching.picked.length === 0 || isRecutting}
+                  className="rounded-full border border-zinc-700 px-2.5 py-1 hover:bg-zinc-800 disabled:opacity-40"
+                >
+                  Undo
+                </button>
+                <span className="ml-auto flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setTouching(null)
+                      setTouchNote(null)
+                    }}
+                    disabled={isRecutting}
+                    className="rounded-full px-2.5 py-1 text-zinc-400 hover:text-zinc-200 disabled:opacity-40"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void applyTouches()}
+                    disabled={touching.picked.length === 0 || isRunning}
+                    title={
+                      isRunning && !isRecutting
+                        ? 'Wait for the edit that is running to finish'
+                        : 'Cuts the same answer out again — no new request, nothing is spent'
+                    }
+                    className="rounded-full bg-blue-600 px-3 py-1 font-semibold text-white hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    {isRecutting ? 'Working…' : `Apply ${touching.picked.length || ''} — no new request`}
+                  </button>
+                </span>
+                {touchNote && <p className="w-full text-amber-400">{touchNote}</p>}
+              </div>
+            )}
             <div className="flex flex-wrap items-center gap-2">
               {previous && (
                 <button
@@ -277,6 +449,22 @@ export function EditStudio({
                     }
                   >
                     Use whole picture
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setTouchNote(null)
+                      setTouching(touching ? null : { versionId: selected.id, take: true, size: TOUCH_SIZES[1].r, picked: [] })
+                    }}
+                    disabled={!touchable}
+                    className={`rounded-xl border px-3 py-1.5 text-xs disabled:cursor-default disabled:opacity-40 ${
+                      touching
+                        ? 'border-blue-500 bg-blue-500/15 text-blue-500'
+                        : 'border-zinc-700 text-zinc-300 hover:bg-zinc-800'
+                    }`}
+                    title="Part of the edit left behind, or something changed that shouldn’t have? Click those spots — the same answer is cut out again, without a new request"
+                  >
+                    ✚ Touch up
                   </button>
                 </>
               )}
@@ -433,6 +621,47 @@ export function EditStudio({
                       only around arrows
                     </label>
                   )}
+                  {marks.length > 0 && localOnly && (
+                    <label
+                      className={`flex items-center gap-1.5 text-[11px] ${hasGoogleKey ? 'text-zinc-400' : 'text-zinc-600'}`}
+                      title={
+                        hasGoogleKey
+                          ? 'First asks a Gemini model where the thing each arrow points at is — all of it — and where the ' +
+                            'faces are. Then the whole thing is taken even where it barely differs from what is behind ' +
+                            'it, and faces are left alone. One extra request per edit, with your Google key.'
+                          : 'Needs a Google AI Studio key (settings panel on the main page)'
+                      }
+                    >
+                      <input
+                        type="checkbox"
+                        checked={prefs.findObject && hasGoogleKey}
+                        disabled={!hasGoogleKey}
+                        onChange={(e) => updatePrefs({ findObject: e.target.checked })}
+                        className="accent-blue-500"
+                      />
+                      find the object
+                    </label>
+                  )}
+                  {marks.length > 0 && localOnly && prefs.findObject && hasGoogleKey && (
+                    <>
+                      <input
+                        type="text"
+                        list="studio-locator-models"
+                        value={prefs.locatorModel}
+                        onChange={(e) => updatePrefs({ locatorModel: e.target.value.trim() })}
+                        placeholder={DEFAULT_LOCATOR_MODEL}
+                        spellCheck={false}
+                        aria-label="Gemini model that finds the object"
+                        title={`The Gemini model that looks at the picture — any one that understands images (${LOCATOR_MODELS.join(', ')}, …). Empty: ${DEFAULT_LOCATOR_MODEL}.`}
+                        className="w-36 rounded-full border border-zinc-700 bg-zinc-950 px-2.5 py-1 text-[11px] text-zinc-300 placeholder-zinc-600 outline-none focus:border-blue-500"
+                      />
+                      <datalist id="studio-locator-models">
+                        {LOCATOR_MODELS.map((id) => (
+                          <option key={id} value={id} />
+                        ))}
+                      </datalist>
+                    </>
+                  )}
                   <label
                     className={`flex items-center gap-1.5 text-[11px] ${referenceCount > 0 ? 'text-zinc-400' : 'text-zinc-600'}`}
                     title={
@@ -570,6 +799,7 @@ function TurnView({
             {turn.candidates > 1 ? ` · ${turn.candidates} results` : ''}
             {turn.withReferences ? ' · with references' : ''}
             {turn.localOnly && turn.marks.length > 0 ? ' · only around arrows' : ''}
+            {turn.findObject ? ' · find the object' : ''}
           </p>
         </div>
       </div>
@@ -580,11 +810,16 @@ function TurnView({
           <div className="space-y-1.5">
             <div className="flex items-center gap-2">
               <span className="h-2 w-2 animate-pulse rounded-full bg-blue-400" />
-              <span>
-                Working on it… try <b>{Math.max(1, attempts + 1)}</b>
-                {live ? ` of ${live.cap}` : ''}
-                {answers > 0 && ` · ${answers}/${turn.candidates} done`}
-              </span>
+              {turn.findObject && !turn.found ? (
+                // (the edit itself has not been asked for yet)
+                <span>Finding the object first — asking Gemini where it is…</span>
+              ) : (
+                <span>
+                  Working on it… try <b>{Math.max(1, attempts + 1)}</b>
+                  {live ? ` of ${live.cap}` : ''}
+                  {answers > 0 && ` · ${answers}/${turn.candidates} done`}
+                </span>
+              )}
               <button type="button" onClick={onStop} className="ml-auto text-[11px] text-zinc-500 hover:text-red-400">
                 stop
               </button>
@@ -625,6 +860,11 @@ function TurnView({
               </button>
             ))}
           </div>
+        )}
+        {turn.found && (
+          <p className="mt-1.5 text-[11px] text-zinc-500" title={turn.found.problem ?? undefined}>
+            {foundNote(turn, results)}
+          </p>
         )}
         {localNotes(turn, results).map((note) => (
           <p key={note} className="mt-1.5 text-[11px] text-zinc-500">
@@ -712,6 +952,47 @@ function localNotes(turn: EditTurn, results: EditVersion[]): string[] {
     notes.push('Only what changed around the arrows was kept — everything else is your original, pixel for pixel.')
   }
   return notes
+}
+
+// What "find the object" came back with, and what was made of it, in plain words
+function foundNote(turn: EditTurn, results: EditVersion[]): string {
+  const found = turn.found!
+  if (found.problem) return `“Find the object” didn’t get an answer (${found.problem}) — carried on without it.`
+  // An area is "used" if any result's cut went by it
+  const local = results.filter((v) => v.local)
+  const usedBy = (i: number) => local.some((v) => v.local!.info.extentsUsed?.[i])
+  const settled = local.length > 0
+  const named: string[] = []
+  const unused: number[] = []
+  const missing: number[] = []
+  found.boxes.forEach((box, i) => {
+    if (!box) missing.push(i + 1)
+    else if (!settled || usedBy(i)) named.push(`${found.labels[i] ?? 'the thing'} (${i + 1})`)
+    else unused.push(i + 1)
+  })
+  const parts: string[] = []
+  if (named.length > 0) parts.push(`Found: ${named.join(', ')}`)
+  if (unused.length > 0)
+    parts.push(
+      `the area found at ${unused.length === 1 ? 'arrow' : 'arrows'} ${listing(unused)} wasn’t gone by (it didn’t fit the arrow, or what it held stayed as it was)`,
+    )
+  if (missing.length > 0) parts.push(`nothing found at ${missing.length === 1 ? 'arrow' : 'arrows'} ${listing(missing)}`)
+  if (found.faces.length > 0) {
+    // An arrow pointing into a face's area still edits what it points at there
+    const into = turn.marks.some((m) =>
+      found.faces.some((f) => m.x >= f.x0 && m.x <= f.x1 && m.y >= f.y0 && m.y <= f.y1),
+    )
+    parts.push(
+      `${found.faces.length} ${found.faces.length === 1 ? 'face' : 'faces'} guarded` +
+        (into ? ' (an arrow points into one: only what it points at changes there)' : ''),
+    )
+  } else if (named.length > 0) {
+    // (with none reported, nothing guards a face that lies in a found area)
+    parts.push('no face reported — if there is one near the thing, check it')
+  }
+  const text = parts.join(' · ')
+  const sentence = text.charAt(0).toUpperCase() + text.slice(1)
+  return named.length > 0 || found.faces.length > 0 ? `${sentence}. Hold “what changed” to see where.` : `${sentence}.`
 }
 
 // 1 · 1 and 2 · 1, 2 and 3

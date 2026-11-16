@@ -98,6 +98,33 @@ const ZOOM_GAIN = 0.97 // a zoom must improve the match by this much to be used
 const SCALE_MAX = 0.08
 const AR_TOLERANCE = 0.03
 const UNRELATED = 0.85 // share of detailed areas changed: a different picture
+// Inside the extent of a thing (see ObjectExtent), an object that looks like
+// what is behind it (an arm across a torso) changes clearly only along its
+// outline, a thin line — the kind a redraw also leaves where an edge moved a
+// little. The difference: a moved edge has its match a few pixels away in the
+// other picture, an outline that appeared or disappeared has none.
+//
+// Outlines are only gone by inside such an extent. On their own they can't be
+// told from fine lines of a face that the model erased or shifted, and faint
+// change can't be told from a face it re-toned: followed without knowing where
+// the thing is, they take faces.
+const OUTLINE_TOLERANCE = 3 // px: no match this far around = not a moved edge
+const OUTLINE_ONE_SIDED = 0.5 // one picture's edge there is at most this × the other's
+// An extent a vision model gave for the thing an arrow points at
+const EXTENT_MAX = 0.6 // of the picture: more than that is the scene, not a thing
+const EXTENT_SLACK = 0.03 // the tip may be this far outside it (models are approximate)
+// What an extent would take is "still there" — re-toned, not replaced — when
+// the original's detail in its faint part came through with its strength:
+// then the extent has taken in something else (a face no box was given for)
+// and isn't used. A backstop, not a guarantee: it has nothing to go by on
+// small or featureless faces.
+// (see ownInGuard) px at work size of a thing outside a guard for its kind of
+// change to be told
+const OWN_THING = 2000
+const STILL_AREA = 150 // px (work size) of faint change there has to be, to judge by
+const STILL_DETAIL = 0.01 // of it: detail of the original there has to be, to judge by
+const STILL_KEPT = 0.47 // of that detail that kept its strength (re-toned faces: 0.5 and up; things: under 0.45)
+const STILL_MATCH = 0.35 // "kept": within this share of the original edge strength
 const WIDESPREAD = 0.02 // share of the picture clearly changed away from the edit
 
 export interface LocalEditInfo {
@@ -110,6 +137,10 @@ export interface LocalEditInfo {
   // The model also clearly changed things away from the arrows (a new
   // lighting, a restyle): only the part around the arrows was kept
   widespread: boolean
+  // Per arrow, when extents were given: was the arrow's extent gone by?
+  // (false: none given, it didn't hold the tip, it was the whole scene, or
+  // what it held at the tip was still there)
+  extentsUsed?: boolean[]
 }
 
 // Detection numbers per arrow, for tuning and diagnostics
@@ -125,6 +156,9 @@ export interface ArrowStats {
   near: number
   peak: number
   changed: boolean
+  // With an extent: [share of what it would take that is detail of the
+  // original, share of that detail that kept its strength] — see STILL_*
+  still?: [number, number]
 }
 let lastStats: ArrowStats[] = []
 let lastDebug: {
@@ -201,14 +235,55 @@ export function releaseLocalEdit(job: LocalEditJob): void {
   job.original.close()
 }
 
+// A rectangle of the picture, as fractions of its width and height
+export interface Area {
+  x0: number
+  y0: number
+  x1: number
+  y1: number
+}
+
+// Where the thing an arrow points at is, as a vision model sees it: its box
+// and, if the model gave one, its silhouette (a picture of the box's area,
+// light where the thing is)
+export interface ObjectExtent {
+  box: Area
+  mask?: Blob
+}
+
+// A spot the user picked on a finished edit: take everything the model drew
+// within `r` (of the picture's shorter side) of it, or put the original back
+export interface Touch {
+  x: number
+  y: number
+  r: number
+  take: boolean
+}
+
+export interface LocalEditOptions {
+  // Per arrow, in the arrows' order (null: not found). Inside an extent even
+  // faint change belongs to the edit.
+  extents?: (ObjectExtent | null)[]
+  // Faces and the like: nothing is taken there on the strength of an outline
+  // or an extent (clear change at an arrow still is)
+  guarded?: Area[]
+  touches?: Touch[]
+}
+
 export type LocalComposite =
   | { kind: 'ok'; blob: Blob; mask: Blob; info: LocalEditInfo }
   // `final`: trying again can't help (the model can't keep the picture's shape)
   | { kind: 'reject'; reason: string; final?: boolean }
 
 const SHAPE_REJECT = 'the model changed the picture’s shape'
+// Colour of the "what changed" overlay (RGBA)
+const OVERLAY_TINT = [217, 70, 239, 140]
 
-export async function composeLocalEdit(job: LocalEditJob, result: ImageBitmap): Promise<LocalComposite> {
+export async function composeLocalEdit(
+  job: LocalEditJob,
+  result: ImageBitmap,
+  options: LocalEditOptions = {},
+): Promise<LocalComposite> {
   const { W, H, w, h } = job
   const n = w * h
   const sx = w / W
@@ -283,10 +358,12 @@ export async function composeLocalEdit(job: LocalEditJob, result: ImageBitmap): 
   if (looksUnrelated(diff, job.origGrad, gradientMagnitude(aligned.planes[0], w, h), valid, job.zones, n))
     return { kind: 'reject', reason: 'the model drew a different picture' }
 
-  const found = detectChange(job, diff, valid, globalModel, flow, aligned.planes)
+  const hints = await readHints(job, options)
+  const found = detectChange(job, diff, valid, globalModel, flow, aligned.planes, hints)
   lastStats = found.stats
   lastDebug = { ...lastDebug, grown: found.grown.slice(), widespread: found.awayShare, maps: found.maps }
-  if (!found.arrowsChanged.some(Boolean)) return { kind: 'reject', reason: 'no change near the arrows' }
+  if (!found.arrowsChanged.some(Boolean) && !hints.taken)
+    return { kind: 'reject', reason: 'no change near the arrows' }
   const { grown } = found
 
   // 3. Seam per changed area, at a finer crop resolution
@@ -377,8 +454,13 @@ export async function composeLocalEdit(job: LocalEditJob, result: ImageBitmap): 
       const outC = resampleMask(found.keepOut, w, h, cx0 * sx, cy0 * sy, cropW * sx, cropH * sy, cw, ch)
       for (let p = 0; p < nc; p++) if (outC[p]) pockets[p] = 1
     }
+    // … and in guarded areas and where the user put the original back,
+    // nothing is taken at all
+    const backC = found.forbidden
+      ? resampleMask(found.forbidden, w, h, cx0 * sx, cy0 * sy, cropW * sx, cropH * sy, cw, ch)
+      : null
     for (let p = 0; p < nc; p++) {
-      if (!resC.valid[p] || !origC.valid[p]) {
+      if (!resC.valid[p] || !origC.valid[p] || (backC && backC[p])) {
         may[p] = 0
         must[p] = 0
       } else if (pockets[p] && !must[p]) may[p] = 0
@@ -405,11 +487,14 @@ export async function composeLocalEdit(job: LocalEditJob, result: ImageBitmap): 
     )
 
     // Overlay for the UI: the area taken from the model, at work resolution
+    // (a see-through tint, ready to lay over the picture)
     const regionCanvas = new OffscreenCanvas(cw, ch)
     const rimg = new ImageData(cw, ch)
     for (let p = 0; p < nc; p++) {
-      rimg.data[p * 4] = rimg.data[p * 4 + 1] = rimg.data[p * 4 + 2] = 255
-      rimg.data[p * 4 + 3] = region[p] ? 255 : 0
+      rimg.data[p * 4] = OVERLAY_TINT[0]
+      rimg.data[p * 4 + 1] = OVERLAY_TINT[1]
+      rimg.data[p * 4 + 2] = OVERLAY_TINT[2]
+      rimg.data[p * 4 + 3] = region[p] ? OVERLAY_TINT[3] : 0
     }
     regionCanvas.getContext('2d')!.putImageData(rimg, 0, 0)
     ovctx.drawImage(regionCanvas, cx0 * sx, cy0 * sy, cropW * sx, cropH * sy)
@@ -430,6 +515,7 @@ export async function composeLocalEdit(job: LocalEditJob, result: ImageBitmap): 
       coverage: takenFull / (W * H),
       reachedLimit: found.reachedLimit,
       widespread: found.awayShare > WIDESPREAD,
+      ...(options.extents ? { extentsUsed: found.extentsUsed } : {}),
     },
   }
 }
@@ -592,6 +678,9 @@ interface Detection {
   grown: Uint8Array
   // Parts that changed only as the model's drift: kept from the original
   keepOut?: Uint8Array | null
+  // Where nothing may be taken at all (guarded areas, spots put back)
+  forbidden?: Uint8Array | null
+  extentsUsed?: boolean[]
   reachedLimit: boolean
   // share of the picture clearly changed away from the edit
   awayShare: number
@@ -606,6 +695,7 @@ function detectChange(
   globalModel: NoiseModel,
   flow: FlowField,
   answerDet: Float32Array[],
+  hints: Hints,
 ): Detection {
   const { w, h, marks, origGrad: grad } = job
   const n = w * h
@@ -635,12 +725,14 @@ function detectChange(
   const strong = new Uint8Array(n)
   const weak = new Uint8Array(n)
   const ratio = new Float32Array(n)
+  const high = new Float32Array(n)
   for (let p = 0; p < n; p++) {
     if (!valid[p]) continue
     const m = owner[p] >= 0 ? models[owner[p]] : globalModel
     const noise = m.a + m.b * grad[p]
     ratio[p] = diff[p] / noise
-    if (diff[p] > Math.max(HIGH_MIN, HIGH_K * noise)) strong[p] = 1
+    high[p] = Math.max(HIGH_MIN, HIGH_K * noise)
+    if (diff[p] > high[p]) strong[p] = 1
     if (diff[p] > Math.max(LOW_MIN, LOW_K * noise)) weak[p] = 1
   }
 
@@ -649,6 +741,24 @@ function detectChange(
   // hair, a cable — can be the edit); closing joins the fragments of one
   // changed object.
   const opened = open(strong, w, h, 1)
+  // Thin lines of clear change that are outlines existing in one picture only
+  // (an edge only one of the two has; a recoloured strand is an edge in
+  // both), away from the solid changes, whose rims are thin too. Only looked
+  // for when the extent of a thing is known.
+  const outline = new Uint8Array(n)
+  const answerGrad = hints.extents.some(Boolean) ? gradientMagnitude(answerDet[0], w, h) : null
+  if (answerGrad) {
+    const bulk = open(strong, w, h, Math.max(2, closeR))
+    const nearBulk = dilate(bulk, w, h, closeR + 1)
+    for (let p = 0; p < n; p++) {
+      if (!strong[p] || bulk[p] || nearBulk[p]) continue
+      if (!oneSidedEdge(grad, answerGrad, w, h, p, 2)) continue
+      if (unmatchedAround(job.origDet, answerDet, w, h, p, OUTLINE_TOLERANCE) > high[p]) outline[p] = 1
+    }
+  }
+  // What is taken because it lies in a thing's extent
+  const outlined = new Uint8Array(n)
+  const extentsUsed = marks.map(() => false)
   const objects = opened.slice()
   for (let p = 0; p < n; p++) if (strong[p] && coreMask[p]) objects[p] = 1
   const joined = erode(dilate(objects, w, h, closeR), w, h, closeR)
@@ -686,9 +796,20 @@ function detectChange(
       for (const [l, m] of mass) if (l !== first && m >= mass.get(first)! / 3) kept.push(l)
     const keptMass = kept.reduce((acc, l) => acc + mass.get(l)!, 0)
     const keptPeak = kept.reduce((acc, l) => Math.max(acc, peak.get(l)!), 0)
-    const changed =
+    const seeded =
       keptMass >= SEED_FLOOR && (keptPeak >= SEED_PEAK || keptMass >= SEED_PLENTY * Math.PI * core * core)
-    if (changed) kept.forEach((l) => keep.add(l))
+    if (seeded) kept.forEach((l) => keep.add(l))
+    // The tip may sit in a thing a vision model has found the extent of:
+    // what changed there, however faintly, in one piece with the tip
+    const within =
+      hints.extents[i] && answerGrad
+        ? changedWithin(cx, cy, core, hints.extents[i]!, weak, strong, outline, grad, answerGrad, valid, hints.guarded, w, h, closeR)
+        : null
+    if (within?.piece) {
+      extentsUsed[i] = true
+      for (let p = 0; p < n; p++) if (within.piece[p]) outlined[p] = 1
+    }
+    const changed = seeded || Boolean(within?.piece)
     arrowsChanged.push(changed)
     const tx = Math.min(w - 1, Math.max(0, Math.round(cx)))
     const ty = Math.min(h - 1, Math.max(0, Math.round(cy)))
@@ -700,10 +821,21 @@ function detectChange(
       near: first >= 0 ? near.get(first)! : -1,
       peak: keptPeak,
       changed,
+      ...(within ? { still: within.still } : {}),
     })
   })
-  if (!arrowsChanged.some(Boolean))
-    return { arrowsChanged, grown: new Uint8Array(n), reachedLimit: false, awayShare: 0, stats }
+  if (!arrowsChanged.some(Boolean)) {
+    const grown = new Uint8Array(n)
+    if (hints.taken) for (let p = 0; p < n; p++) if (hints.taken[p] && valid[p] && !hints.restored?.[p]) grown[p] = 1
+    // (guards hold here too: no arrow has an object of its own in them)
+    let forbidden: Uint8Array | null = null
+    if (hints.guarded || hints.restored) {
+      forbidden = new Uint8Array(n)
+      for (let p = 0; p < n; p++)
+        forbidden[p] = (hints.guarded?.[p] && !hints.taken?.[p]) || hints.restored?.[p] ? 1 : 0
+    }
+    return { arrowsChanged, grown, forbidden, reachedLimit: false, awayShare: 0, stats, extentsUsed }
+  }
 
   // The edit: those objects, followed as far as the change stays clear
   // (within FAR_REACH of a changed arrow) — a whole recoloured saucer is
@@ -717,6 +849,28 @@ function detectChange(
     if (strong[p] && coreMask[p]) seeds[p] = 1
   }
   const edit = growFrom(seeds, allowed, w, h)
+  // Guarded areas (faces) keep the original — all but what of the arrows' own
+  // object lies in them (a mole the arrow is on, a recoloured fringe hanging
+  // into the face's box): see ownInGuard
+  const barred = new Uint8Array(n)
+  // … and that part gets the room around it that a seam and a blend need
+  let roomInGuard: Uint8Array | null = null
+  if (hints.guarded) {
+    const tipInGuard = marks.some((m) => {
+      const x = Math.min(w - 1, Math.max(0, Math.round(m.x * w)))
+      const y = Math.min(h - 1, Math.max(0, Math.round(m.y * h)))
+      return hints.guarded![y * w + x] === 1
+    })
+    const own = ownInGuard(edit, seeds, hints.guarded, coreMask, tipInGuard, job.origDet, answerDet, w, h)
+    for (let p = 0; p < n; p++) {
+      if (!hints.guarded[p]) continue
+      if (own[p]) continue
+      barred[p] = 1
+      edit[p] = 0
+    }
+    roomInGuard = dilate(own, w, h, Math.max(2, FEATHER * unitW) + 2)
+  }
+  for (let p = 0; p < n; p++) if (outlined[p] && !barred[p]) edit[p] = 1
   const firstEdit = edit.slice()
 
   // The rest of the same object, where its change is interrupted for a
@@ -746,7 +900,7 @@ function detectChange(
     }
     if (joins.size === 0) break
     joins.forEach((l) => keep.add(l))
-    for (let p = 0; p < n; p++) if (labels[p] && joins.has(labels[p]) && farMask[p]) edit[p] = 1
+    for (let p = 0; p < n; p++) if (labels[p] && joins.has(labels[p]) && farMask[p] && !barred[p]) edit[p] = 1
   }
 
   // Plus faint change right at its edges (soft shadows, anti-aliasing, the
@@ -768,16 +922,33 @@ function detectChange(
     forDisc(mark.x * w, mark.y * h, core, w, h, (p, d2) => {
       if (seeds[p]) nearest = Math.min(nearest, d2)
     })
+    // (an arrow gone by its extent alone has no clear change at its tip)
+    if (nearest === Infinity) return
     const r = Math.sqrt(nearest) + touch
     forDisc(mark.x * w, mark.y * h, r, w, h, (p) => {
       if (seeds[p]) atTips[p] = 1
     })
   })
+  // (what lies in a thing's extent is that thing, however evenly it changed)
   const drift = toneDrift(grown, atTips, job.origDet, answerDet, valid, w, h)
-  if (drift) for (let p = 0; p < n; p++) if (drift[p]) grown[p] = 0
+  if (drift) for (let p = 0; p < n; p++) if (drift[p] && !outlined[p]) grown[p] = 0
   // Specks inside the change belong to it; anything bigger it surrounds
   // (a face inside a recoloured hood) does not
   fillSmallHoles(grown, w, h, Math.PI * closeR * closeR)
+  // Nothing of it in guarded areas, whichever step reached into them
+  for (let p = 0; p < n; p++) if (barred[p]) grown[p] = 0
+  // The user's own touch-ups have the last word
+  if (hints.taken) for (let p = 0; p < n; p++) if (hints.taken[p] && valid[p]) grown[p] = 1
+  if (hints.restored) for (let p = 0; p < n; p++) if (hints.restored[p]) grown[p] = 0
+  // Where nothing may be taken at all, not even by the seam or the blend:
+  // guarded areas (unless the user's touch-up took a spot there) and spots
+  // the user put back
+  let forbidden: Uint8Array | null = null
+  if (hints.guarded || hints.restored) {
+    forbidden = new Uint8Array(n)
+    for (let p = 0; p < n; p++)
+      forbidden[p] = (barred[p] && !roomInGuard?.[p] && !hints.taken?.[p]) || hints.restored?.[p] ? 1 : 0
+  }
   const reachedLimit = touchesReachEdge(grown, marks, arrowsChanged, w, h, farReach)
 
   // Clear change the model made elsewhere
@@ -793,11 +964,315 @@ function detectChange(
     arrowsChanged,
     grown,
     keepOut: drift,
+    forbidden,
     reachedLimit,
     awayShare: total > 0 ? away / total : 0,
     stats,
-    maps: { strong, weak, joined, first: firstEdit },
+    extentsUsed,
+    maps: { strong, weak, joined, first: firstEdit, outline, outlined },
   }
+}
+
+// What of the arrows' own object (their clear change, followed as usual) may
+// be taken inside a guarded area. Being connected is not enough: a face the
+// model re-toned strongly reads as clear change too and joins a recoloured
+// hood beside it, and fine lines it erased join an earring. So:
+// - the clear change within the core disc of a tip (the arrow points at it);
+// - beyond that, only what is the same kind of change as the thing itself —
+//   the colour mapping fitted to the thing accounts for it (a fringe
+//   recoloured with the hair, the rest of a pair of glasses) — where there is
+//   enough of the thing to tell: a thing of some size outside the guard, or,
+//   for an arrow pointing into the guard, the change at its tip;
+// - all in one piece with the tip's change or with the object outside.
+function ownInGuard(
+  edit: Uint8Array,
+  seeds: Uint8Array,
+  guarded: Uint8Array,
+  coreMask: Uint8Array,
+  tipInGuard: boolean,
+  orig: Float32Array[],
+  answer: Float32Array[],
+  w: number,
+  h: number,
+): Uint8Array {
+  const n = w * h
+  const outside: number[] = []
+  const atTips: number[] = []
+  let any = false
+  let count = 0
+  for (let p = 0; p < n; p++) {
+    if (!edit[p]) continue
+    if (guarded[p]) any = true
+    else if (count++ % 2 === 0 && outside.length < 30000) outside.push(p)
+    if (seeds[p] && atTips.length < 30000) atTips.push(p)
+  }
+  if (!any) return new Uint8Array(n)
+  const reference = outside.length >= OWN_THING / 2 ? outside : tipInGuard ? atTips : []
+  const thing = fitColourMap(orig, answer, reference)
+  const candidate = new Uint8Array(n)
+  const start = new Uint8Array(n)
+  for (let p = 0; p < n; p++) {
+    if (!edit[p] || !guarded[p]) continue
+    if (seeds[p]) start[p] = 1
+    if (coreMask[p]) {
+      candidate[p] = 1
+      continue
+    }
+    if (!thing) continue
+    const change = Math.sqrt(
+      (answer[0][p] - orig[0][p]) ** 2 + (answer[1][p] - orig[1][p]) ** 2 + (answer[2][p] - orig[2][p]) ** 2,
+    )
+    if (mapError(thing, orig, answer, [p]) < 0.5 * change) candidate[p] = 1
+  }
+  // … in one piece with the tip's change, or with the object outside the guard
+  for (let p = 0; p < n; p++) {
+    if (!candidate[p] || start[p]) continue
+    const x = p % w
+    const beside = [x > 0 ? p - 1 : -1, x < w - 1 ? p + 1 : -1, p - w, p + w]
+    if (beside.some((q) => q >= 0 && q < n && edit[q] && !guarded[q])) start[p] = 1
+  }
+  return growFrom(start, candidate, w, h)
+}
+
+// What the caller knows beyond the two pictures, as masks at work size
+interface Hints {
+  extents: (Uint8Array | null)[]
+  guarded: Uint8Array | null
+  taken: Uint8Array | null
+  restored: Uint8Array | null
+}
+
+async function readHints(job: LocalEditJob, options: LocalEditOptions): Promise<Hints> {
+  const { w, h, marks } = job
+  const n = w * h
+  const unit = Math.min(w, h)
+  const tips = marks.map((m) => ({ x: m.x * w, y: m.y * h }))
+  const rect = (a: Area) => ({
+    x0: Math.max(0, Math.floor(Math.min(a.x0, a.x1) * w)),
+    y0: Math.max(0, Math.floor(Math.min(a.y0, a.y1) * h)),
+    x1: Math.min(w, Math.ceil(Math.max(a.x0, a.x1) * w)),
+    y1: Math.min(h, Math.ceil(Math.max(a.y0, a.y1) * h)),
+  })
+
+  // Guarded areas. (An arrow pointing into one still edits what it points
+  // at: the object its own clear change belongs to is not barred — see
+  // detectChange.)
+  let guarded: Uint8Array | null = null
+  for (const area of options.guarded ?? []) {
+    if (!area) continue
+    const r = rect(area)
+    if (!(r.x1 > r.x0 && r.y1 > r.y0)) continue
+    guarded = guarded ?? new Uint8Array(n)
+    for (let y = r.y0; y < r.y1; y++) guarded.fill(1, y * w + r.x0, y * w + r.x1)
+  }
+
+  const extents: (Uint8Array | null)[] = []
+  for (let i = 0; i < marks.length; i++) {
+    const extent = options.extents?.[i]
+    extents.push(null)
+    if (!extent || !extent.box) continue
+    const r = rect(extent.box)
+    const bw = r.x1 - r.x0
+    const bh = r.y1 - r.y0
+    // It has to hold the tip (give or take), and be a thing, not the scene
+    const slack = EXTENT_SLACK * unit
+    const t = tips[i]
+    if (bw < 2 || bh < 2 || bw * bh > EXTENT_MAX * n) continue
+    if (t.x < r.x0 - slack || t.x > r.x1 + slack || t.y < r.y0 - slack || t.y > r.y1 + slack) continue
+    const mask = new Uint8Array(n)
+    let shape: Uint8ClampedArray | null = null
+    if (extent.mask) {
+      try {
+        const bitmap = await createImageBitmap(extent.mask)
+        const canvas = new OffscreenCanvas(bw, bh)
+        const ctx = canvas.getContext('2d', { willReadFrequently: true })!
+        ctx.drawImage(bitmap, 0, 0, bw, bh)
+        bitmap.close()
+        shape = ctx.getImageData(0, 0, bw, bh).data
+      } catch {
+        shape = null // an unreadable silhouette: the box will do
+      }
+    }
+    let area = 0
+    for (let y = 0; y < bh; y++) {
+      for (let x = 0; x < bw; x++) {
+        const q = (y * bw + x) * 4
+        if (shape && (shape[q + 3] < 128 || shape[q] + shape[q + 1] + shape[q + 2] < 3 * 128)) continue
+        mask[(r.y0 + y) * w + r.x0 + x] = 1
+        area++
+      }
+    }
+    // (a silhouette that is next to nothing says nothing: the box will do)
+    if (shape && area < 0.05 * bw * bh) for (let y = r.y0; y < r.y1; y++) mask.fill(1, y * w + r.x0, y * w + r.x1)
+    extents[i] = mask
+  }
+
+  let taken: Uint8Array | null = null
+  let restored: Uint8Array | null = null
+  for (const touch of options.touches ?? []) {
+    if (!touch) continue
+    const disc = new Uint8Array(n)
+    paintDisc(disc, w, h, touch.x * w, touch.y * h, Math.max(1, touch.r * unit))
+    taken = taken ?? new Uint8Array(n)
+    restored = restored ?? new Uint8Array(n)
+    // later touches override earlier ones
+    for (let p = 0; p < n; p++) {
+      if (!disc[p]) continue
+      taken[p] = touch.take ? 1 : 0
+      restored[p] = touch.take ? 0 : 1
+    }
+  }
+  if (taken && !taken.some((v) => v === 1)) taken = null
+  if (restored && !restored.some((v) => v === 1)) restored = null
+  // (to the very edge of the spot as the user saw it, whatever the rounding)
+  if (restored) restored = dilate(restored, w, h, 2)
+  return { extents, guarded, taken, restored }
+}
+
+// Within the extent of the thing a tip points at: everything that changed,
+// faint or clear (thin outlines included), that is in one piece with the tip
+// (fragments joined as usual); nothing in guarded areas. Null if nothing to
+// speak of changed there — or if what did is still there, only re-toned: then
+// the extent has taken in something that isn't the thing.
+function changedWithin(
+  cx: number,
+  cy: number,
+  core: number,
+  extent: Uint8Array,
+  weak: Uint8Array,
+  strong: Uint8Array,
+  outline: Uint8Array,
+  grad: Float32Array,
+  answerGrad: Float32Array,
+  valid: Uint8Array,
+  guarded: Uint8Array | null,
+  w: number,
+  h: number,
+  closeR: number,
+): { piece: Uint8Array | null; still: [number, number] } {
+  const n = w * h
+  const inside = (p: number) => extent[p] && valid[p] && !guarded?.[p]
+  const changed = new Uint8Array(n)
+  for (let p = 0; p < n; p++) changed[p] = inside(p) && (weak[p] || strong[p]) ? 1 : 0
+  // without specks — but with the outlines, thin as they are
+  const solid = open(changed, w, h, 1)
+  for (let p = 0; p < n; p++) if (outline[p] && inside(p)) solid[p] = 1
+  const joined = erode(dilate(solid, w, h, closeR), w, h, closeR)
+  for (let p = 0; p < n; p++) if (!inside(p)) joined[p] = 0
+  const start = new Uint8Array(n)
+  let any = false
+  forDisc(cx, cy, core, w, h, (p) => {
+    if (joined[p]) {
+      start[p] = 1
+      any = true
+    }
+  })
+  // Nothing changed at the tip itself (a thing that differs from what is
+  // behind it by its outline alone): then from its outline — the pieces of
+  // it nearest the tip, not any line somewhere in the extent
+  if (!any) {
+    const { labels } = labelComponents(joined, w, h)
+    const nearest = new Map<number, number>()
+    for (let p = 0; p < n; p++) {
+      if (!outline[p] || !labels[p]) continue
+      const x = p % w
+      const d = Math.hypot(x - cx, (p - x) / w - cy)
+      if (d < (nearest.get(labels[p]) ?? Infinity)) nearest.set(labels[p], d)
+    }
+    const first = Math.min(...nearest.values())
+    for (let p = 0; p < n; p++) {
+      const l = labels[p]
+      if (l && outline[p] && nearest.get(l)! <= 1.5 * first + closeR) {
+        start[p] = 1
+        any = true
+      }
+    }
+  }
+  if (!any) return { piece: null, still: [0, 0] }
+  const piece = growFrom(start, joined, w, h)
+
+  // If its faint part is still there — re-toned, not replaced — the extent
+  // has taken in something that isn't the thing (a face no box was given
+  // for), and isn't gone by. Judged on the detail of the original in the
+  // faint part, away from clear change (the flanks of an erased line say
+  // nothing about the skin around it): did its edges keep their strength?
+  // (Smooth skin has no detail to judge by, so this is one decision for the
+  // whole extent, not one per patch.)
+  const level = Math.max(4, quantile(sampleEvery(grad, valid, 7), 0.7))
+  const clear = new Uint8Array(n)
+  for (let p = 0; p < n; p++) clear[p] = strong[p] || outline[p] ? 1 : 0
+  const nearClear = dilate(clear, w, h, 3)
+  let judged = 0
+  let detail = 0
+  let kept = 0
+  for (let p = 0; p < n; p++) {
+    if (!piece[p] || !weak[p] || nearClear[p]) continue
+    judged++
+    if (grad[p] < level) continue
+    detail++
+    if (Math.abs(answerGrad[p] - grad[p]) <= STILL_MATCH * grad[p]) kept++
+  }
+  const still: [number, number] = [detail / Math.max(1, judged), kept / Math.max(1, detail)]
+  if (judged >= STILL_AREA && detail >= STILL_DETAIL * judged && kept >= STILL_KEPT * detail) return { piece: null, still }
+  let area = 0
+  for (let p = 0; p < n; p++) if (piece[p]) area++
+  if (area < SEED_FLOOR) return { piece: null, still }
+  // Specks it encloses are part of it; anything bigger it surrounds is not
+  fillSmallHoles(piece, w, h, Math.PI * closeR * closeR)
+  for (let p = 0; p < n; p++) if (!inside(p)) piece[p] = 0
+  return { piece, still }
+}
+
+// An edge here in one picture and next to none in the other
+function oneSidedEdge(
+  origGrad: Float32Array,
+  answerGrad: Float32Array,
+  w: number,
+  h: number,
+  p: number,
+  r: number,
+): boolean {
+  const x = p % w
+  const y = (p - x) / w
+  let a = 0
+  let b = 0
+  for (let yy = Math.max(0, y - r); yy <= Math.min(h - 1, y + r); yy++) {
+    for (let xx = Math.max(0, x - r); xx <= Math.min(w - 1, x + r); xx++) {
+      const q = yy * w + xx
+      if (origGrad[q] > a) a = origGrad[q]
+      if (answerGrad[q] > b) b = answerGrad[q]
+    }
+  }
+  return Math.min(a, b) < OUTLINE_ONE_SIDED * Math.max(a, b)
+}
+
+// How unlike the other picture a pixel is even when anything within `r` px
+// may stand in for it, either way round: something one picture has there and
+// the other doesn't have anywhere near
+function unmatchedAround(
+  orig: Float32Array[],
+  answer: Float32Array[],
+  w: number,
+  h: number,
+  p: number,
+  r: number,
+): number {
+  const x = p % w
+  const y = (p - x) / w
+  let missingInAnswer = Infinity
+  let missingInOrig = Infinity
+  for (let dy = -r; dy <= r; dy++) {
+    const yy = y + dy < 0 ? 0 : y + dy >= h ? h - 1 : y + dy
+    for (let dx = -r; dx <= r; dx++) {
+      const xx = x + dx < 0 ? 0 : x + dx >= w ? w - 1 : x + dx
+      const q = yy * w + xx
+      const a = (orig[0][p] - answer[0][q]) ** 2 + (orig[1][p] - answer[1][q]) ** 2 + (orig[2][p] - answer[2][q]) ** 2
+      const b = (orig[0][q] - answer[0][p]) ** 2 + (orig[1][q] - answer[1][p]) ** 2 + (orig[2][q] - answer[2][p]) ** 2
+      if (a < missingInAnswer) missingInAnswer = a
+      if (b < missingInOrig) missingInOrig = b
+    }
+  }
+  return Math.sqrt(Math.max(missingInAnswer, missingInOrig))
 }
 
 // Inside a connected change, a second, clearly different kind of change: a
@@ -1638,6 +2113,12 @@ function sampleSigma(data: Uint8ClampedArray, region: Uint8Array, w: number, h: 
     }
   }
   return estimateNoiseSigma(diffs)
+}
+
+function sampleEvery(values: Float32Array, valid: Uint8Array, step: number): number[] {
+  const out: number[] = []
+  for (let p = 0; p < values.length; p += step) if (valid[p]) out.push(values[p])
+  return out
 }
 
 function forDisc(

@@ -25,8 +25,15 @@
   // SQLite-backed Durable Objects are what the free plan allows
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["SyncStore"] }],
   "observability": { "enabled": true },
-  // Workers Builds runs a preview build for pushes to non-production
-  // branches and needs this block. Empty on purpose: a preview has no
-  // password secret, so it only ever shows "Not set up yet".
-  "previews": {}
+  // Workers Builds makes a preview (its own address) for pushes to
+  // non-production branches, from this block. A preview takes nothing from
+  // production: it gets storage of its own (starts empty), and its password
+  // comes from the "Previews Base" secrets — see DEPLOY.md. Without one it
+  // only shows "Not set up yet".
+  "previews": {
+    // The Worker reads env.SYNC, so a preview has to be given the binding too
+    "durable_objects": {
+      "bindings": [{ "name": "SYNC", "class_name": "SyncStore" }]
+    }
+  }
 }

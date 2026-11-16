@@ -16,7 +16,8 @@
    - 项目名保持 `nano-banana-redo`（和仓库里 `wrangler.jsonc` 的 `name` 一致）。
    - Build command 留空；Deploy command 保持默认的 `npx wrangler deploy`。
    - 点 **Deploy**，等它跑完。
-   - 推送到其他分支时 Cloudflare 会顺便做一个「预览」版本，它没有密码，只会显示「Not set up yet」，不用管。
+   - 推送到其他分支时 Cloudflare 会顺便做一个「预览」版本，有自己的网址。它不沿用正式版的密码，
+     没单独设过就只会显示「Not set up yet」。想用它在合并前试新功能，见下面「在合并前试用分支」。
      不想要的话：Settings → Build → 关掉 Preview builds。
 3. **设置密码**：进入刚建好的 `nano-banana-redo` → **Settings** → **Variables and Secrets** →
    **Add** → Type 选 **Secret**，Name 填 `APP_PASSWORD`，Value 填你的密码 → **Deploy**。
@@ -32,6 +33,24 @@
 
 以后往生产分支（默认是 `main`）推送或合并代码，Cloudflare 会自动重新部署，云端数据不受影响。
 想让开发分支一推送就直接上线：Worker → **Settings** → **Build** → **Branch control**，把生产分支改成那个分支。
+
+## 在合并前试用分支（预览版）
+
+每个还没合并的分支，Cloudflare 都会单独做一个预览版，网址形如
+`https://<分支名>-nano-banana-redo.<你的子域>.workers.dev`（在 Worker 页面的 **Previews** 里能找到）。
+
+预览版和正式版是分开的：
+
+- **密码不沿用**。要给预览版单独设一次，设好以后新建的预览版都会自动带上：
+  Worker → **Settings** → **Variables and Secrets** → 把上方的开关从 **Production** 切到 **Previews Base** →
+  **Add** → Type 选 **Secret**，Name 填 `APP_PASSWORD`，Value 填和正式版一样的密码 → 保存。
+- **这个设置只对之后新建的预览版生效**。设置之前就已经存在的预览版不会补上：
+  在 **Previews** 里把那个预览版删掉，再往分支推送一次，它会带着密码重新建出来。
+- **数据是空的、独立的**。预览版有自己的一份云端存储，看不到正式版的 prompt 和参考照片，在预览版里改的东西
+  也不会影响正式版。想带数据进去：正式版里「Download backup」，预览版里「Import a saved file…」。
+- **API key 要再填一次**（网址不同，浏览器当成另一个网站）。
+- 以后改正式版密码时，**Previews Base** 里的要另外改一次，两边不会自动联动。
+- 分支合并或删除后，预览版可以在 **Previews** 里删掉，它那份数据会一起删除。
 
 ## 日常使用
 

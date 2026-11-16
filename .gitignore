@@ -27,3 +27,12 @@ dist-ssr
 site
 .wrangler
 .dev.vars
+
+# Compositor bench (generated cases and results)
+tools/compositor-bench/cases
+tools/compositor-bench/out
+tools/compositor-bench/.build
+tools/compositor-bench/__pycache__
+
+# End-to-end screenshots
+tools/e2e/shots
