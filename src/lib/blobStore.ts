@@ -118,6 +118,12 @@ function open(): Promise<IDBDatabase | null> {
   return opening
 }
 
+// Deletes what earlier visits left behind (asked for once, when the app
+// starts: otherwise it would wait for the first picture of this visit)
+export function tidyPictureStore(): void {
+  void open()
+}
+
 // The same picture, held on disk rather than in memory when that is possible:
 // resolves to a Blob with the same bytes and type, or to the one given
 export async function keepOnDisk(blob: Blob): Promise<Blob> {

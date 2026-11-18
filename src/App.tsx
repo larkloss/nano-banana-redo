@@ -12,6 +12,7 @@ import { Gallery } from './components/gallery/Gallery'
 import { EditStudio } from './components/studio/EditStudio'
 import { useEditStudio } from './hooks/useEditStudio'
 import { heldByImage, letGo } from './lib/release'
+import { tidyPictureStore } from './lib/blobStore'
 import { applyTheme, loadTheme, type Theme } from './lib/theme'
 import { isMockMode } from './lib/mockGemini'
 import { getModel } from './lib/models'
@@ -148,6 +149,8 @@ function App() {
   }, [])
 
   // Warn before closing the tab mid-run (a generation or an edit)
+  useEffect(tidyPictureStore, [])
+
   // Clearing the gallery also frees the pictures: the bytes, the addresses
   // they were shown from, and the edit chains nothing leads back to any more
   const clearGallery = () => {
