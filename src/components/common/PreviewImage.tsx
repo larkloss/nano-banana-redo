@@ -31,7 +31,13 @@ export function PreviewImage({ full, small, ...rest }: Props) {
       data-full={full}
       onPointerDown={showItself}
       onContextMenu={showItself}
-      onDragStart={showItself}
+      onDragStart={(e) => {
+        showItself()
+        // A drag begun in the instant before the picture itself has loaded
+        // would carry the copy: it does not start (the next one will)
+        const img = e.currentTarget
+        if (small && !(img.complete && img.naturalWidth > 0 && img.getAttribute('src') === full)) e.preventDefault()
+      }}
       onDragEnd={showCopy}
       onClick={showCopy}
     />

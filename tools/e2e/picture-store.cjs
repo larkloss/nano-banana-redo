@@ -156,6 +156,20 @@ const shown = (p) => p.evaluate(async () => {
     await generate(b, 1)
     check('pictures made after that are stored and shown as usual', (await stored(b)).length === 1 && (await shown(b)).hash === sha256(PICTURE))
 
+    // The site's data cleared in the browser while the page is open: the
+    // stored pictures are gone, and the page says so instead of only
+    // showing broken pictures; pictures made after that stay in memory
+    const cdp = await context.newCDPSession(b)
+    await cdp.send('Storage.clearDataForOrigin', { origin: await b.evaluate(() => (location.origin === 'null' ? 'file://' : location.origin)), storageTypes: 'indexeddb' })
+    const told = await b.waitForSelector('[role=alert]', { timeout: 10000 }).then((el) => el.innerText(), () => null)
+    check('when the browser clears the site’s data under the open page, the page says so', Boolean(told && /stored data was cleared/.test(told)), told ? told.slice(0, 60) : 'nothing shown')
+    await b.click('[role=alert] button')
+    await b.click('main button:has-text("Clear")')
+    await b.click('main button:has-text("Yes")')
+    await generate(b, 1)
+    const later = await shown(b)
+    check('pictures made after that are shown and read back in full', later.hash === sha256(PICTURE), later.error ?? `${later.bytes} bytes`)
+
     // A reload starts from nothing: what the page held before is deleted
     await b.reload()
     await sleep(1500)

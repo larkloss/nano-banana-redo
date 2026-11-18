@@ -32,6 +32,14 @@ interface Row {
 
 // Where each stored picture sits, so it can be deleted when it is let go
 const stored = new WeakMap<Blob, IDBValidKey>()
+// How many pictures this tab has on disk only
+let onDisk = 0
+// Told when the browser takes the stored pictures away under the open page
+// (its site data was cleared): they can't be read any more
+let tellLost: (() => void) | null = null
+export function onPicturesLost(tell: (() => void) | null): void {
+  tellLost = tell
+}
 let opening: Promise<IDBDatabase | null> | null = null
 
 function request<T>(req: IDBRequest<T>): Promise<T> {
@@ -105,6 +113,14 @@ function open(): Promise<IDBDatabase | null> {
         db.close()
         opening = Promise.resolve(null)
       }
+      // Closed from outside: the site's data was cleared while the page was
+      // open. What was only on disk is gone; from here on pictures stay in
+      // memory, and the user is told
+      db.onclose = () => {
+        opening = Promise.resolve(null)
+        if (onDisk > 0) tellLost?.()
+        onDisk = 0
+      }
       // The lock first: from here on no other tab takes this one for gone
       await holdLock()
       sweep(db).catch(() => undefined)
@@ -160,6 +176,7 @@ async function store(blob: Blob): Promise<Blob> {
       return blob
     }
     stored.set(back, key)
+    onDisk += 1
     return back
   } catch {
     return blob
@@ -174,6 +191,7 @@ export function releaseFromDisk(blobs: Iterable<Blob>): void {
     if (key !== undefined) {
       keys.push(key)
       stored.delete(blob)
+      onDisk = Math.max(0, onDisk - 1)
     }
   }
   if (keys.length === 0) return

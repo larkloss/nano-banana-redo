@@ -304,7 +304,10 @@ export function EditStudio({
                 }
                 boxes={caughtUp && (stage.peek === 'area' || (touching && plain)) ? foundBoxes : undefined}
                 touchUp={
-                  touching && selected.local && caughtUp && plain
+                  // (also in the moment before the stage has caught up with a
+                  // new result: a spot is a place in the picture, and the
+                  // version it belongs to is known)
+                  touching && selected.local && plain
                     ? {
                         applied: selected.local.options.touches ?? [],
                         pending: touching.picked,
