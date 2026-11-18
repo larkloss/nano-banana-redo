@@ -2,8 +2,20 @@ import JSZip from 'jszip'
 import type { GeneratedImage, OutputFormat, ParsedImagePart } from '../types'
 import { getModel } from './models'
 import { toFullColourJpeg } from './jpegExport'
+import { keepOnDisk } from './blobStore'
+
+// The browser's own decoder where it has one: the same bytes, without a loop
+// over tens of millions of characters holding the page up
+const fromBase64 = (Uint8Array as unknown as { fromBase64?: (text: string) => Uint8Array<ArrayBuffer> }).fromBase64
 
 export function base64ToBlob(base64: string, mimeType: string): Blob {
+  if (fromBase64) {
+    try {
+      return new Blob([fromBase64(base64)], { type: mimeType })
+    } catch {
+      // (stricter than atob about odd input: fall through to it)
+    }
+  }
   const binary = atob(base64)
   const bytes = new Uint8Array(binary.length)
   for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
@@ -30,7 +42,7 @@ export async function processImagePart(
   format: OutputFormat,
   meta: { attempt: number; modelId: string },
 ): Promise<GeneratedImage> {
-  const raw = base64ToBlob(part.base64, part.mimeType)
+  const raw = part.blob ?? base64ToBlob(part.base64, part.mimeType)
   // Decide on the real bytes, not the label the API attached to them
   const actual = await sniffImageMimeType(raw, part.mimeType)
   const bitmap = await createImageBitmap(raw)
@@ -47,11 +59,13 @@ export async function processImagePart(
     // browser's download and preview treat it correctly
     blob = new Blob([raw], { type: actual })
   }
+  const [thumbUrl, kept] = await Promise.all([thumbnailUrl(bitmap), keepOnDisk(blob)])
   const image: GeneratedImage = {
     id: crypto.randomUUID(),
     kind: 'image',
-    blob,
-    objectUrl: URL.createObjectURL(blob),
+    blob: kept,
+    objectUrl: URL.createObjectURL(kept),
+    ...(thumbUrl ? { thumbUrl } : {}),
     width: bitmap.width,
     height: bitmap.height,
     mimeType,
@@ -62,6 +76,51 @@ export async function processImagePart(
   }
   bitmap.close()
   return image
+}
+
+// The short side of the small copy that tiles and lists show: enough for an
+// 80 px tile on a 3x screen
+const THUMB_SHORT_SIDE = 256
+// (a very long, thin picture is not made huge to reach that)
+const THUMB_LONG_SIDE = 1024
+
+// A small copy of a picture for the places that show it tiny, so that a strip
+// of twenty versions does not have twenty full-size pictures decoded behind
+// it. A separate file of its own: the picture itself is not touched.
+// Resolves to nothing when the picture is small already or a copy can't be
+// made — the picture itself is shown then.
+export async function thumbnailUrl(
+  source: ImageBitmap | Blob,
+  shortSide = THUMB_SHORT_SIDE,
+  longSide = THUMB_LONG_SIDE,
+): Promise<string | undefined> {
+  let opened: ImageBitmap | null = null
+  let small: ImageBitmap | null = null
+  try {
+    const bitmap = source instanceof Blob ? (opened = await createImageBitmap(source)) : source
+    const scale = Math.min(
+      shortSide / Math.min(bitmap.width, bitmap.height),
+      longSide / Math.max(bitmap.width, bitmap.height),
+    )
+    if (!(scale < 0.75)) return undefined
+    const width = Math.max(1, Math.round(bitmap.width * scale))
+    const height = Math.max(1, Math.round(bitmap.height * scale))
+    // Shrunk by the browser itself, off to the side: drawing a 4K picture
+    // onto a small canvas with good smoothing holds the page up for half a
+    // second
+    small = await createImageBitmap(bitmap, { resizeWidth: width, resizeHeight: height, resizeQuality: 'high' })
+    const canvas = new OffscreenCanvas(width, height)
+    canvas.getContext('2d')!.drawImage(small, 0, 0)
+    // (WebP keeps transparency; a browser that can't write it gives a PNG)
+    const blob = await canvas.convertToBlob({ type: 'image/webp', quality: 0.85 })
+    canvas.width = canvas.height = 0
+    return URL.createObjectURL(blob)
+  } catch {
+    return undefined
+  } finally {
+    opened?.close()
+    small?.close()
+  }
 }
 
 async function toPng(bitmap: ImageBitmap): Promise<Blob> {
@@ -162,11 +221,13 @@ export async function uploadToImage(file: File): Promise<{ image: GeneratedImage
         blob = await canvas.convertToBlob({ type: 'image/png' })
       }
     }
+    const [thumbUrl, kept] = await Promise.all([thumbnailUrl(bitmap), keepOnDisk(blob)])
     const image: GeneratedImage = {
       id: crypto.randomUUID(),
       kind: 'image',
-      blob,
-      objectUrl: URL.createObjectURL(blob),
+      blob: kept,
+      objectUrl: URL.createObjectURL(kept),
+      ...(thumbUrl ? { thumbUrl } : {}),
       width,
       height,
       mimeType: blob.type,

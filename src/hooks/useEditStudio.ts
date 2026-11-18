@@ -11,8 +11,8 @@ import { buildEditPrompt, buildSingleSourcePrompt, renderGuide, summarizeEdit, t
 import type { Area, LocalEditInfo, LocalEditOptions, Touch } from '../lib/localEdit'
 import { locateObjects } from '../lib/locate'
 import { createLocalEditor, makeLocalEditCaller, type Framing, type LocalEditor } from '../lib/localEditClient'
-import { base64ToBlob, processImagePart } from '../lib/imageUtils'
-import { blobToBase64 } from '../edit/lib/mask'
+import { processImagePart, thumbnailUrl } from '../lib/imageUtils'
+import { heldByImage, type Held } from '../lib/release'
 import { cropFromFrame, frameForModel, frameTo, learnShape, marksInFrame, type Frame } from '../lib/frame'
 
 // One picture's edit history. Version 0 is the picture the chain started
@@ -282,7 +282,9 @@ export function useEditStudio({ settings, references, onResult }: Options) {
           // The bubble shows the arrows on the user's own picture, not on a frame
           const shown = framing?.frame ? await renderGuide(source.image.blob, turn.marks) : request.guide
           if (shown) {
-            const guideUrl = URL.createObjectURL(shown.blob)
+            // (a small copy: the bubble shows it at most 160 px tall, and one
+            // stays on screen for every turn of the chain)
+            const guideUrl = (await thumbnailUrl(shown.blob, 480, 960)) ?? URL.createObjectURL(shown.blob)
             patchSession(sessionId, (s) => ({
               ...s,
               turns: s.turns.map((t) => (t.id === turn.id ? { ...t, guideUrl } : t)),
@@ -298,8 +300,8 @@ export function useEditStudio({ settings, references, onResult }: Options) {
           request.settings,
           request.references,
           (image, part) => {
-            const extra = localJob?.extras.get(part.base64)
-            const wholeBlob = extra ? base64ToBlob(extra.raw.base64, extra.raw.mimeType) : null
+            const extra = localJob?.extras.get(part)
+            const wholeBlob = extra?.whole ?? null
             // Numbered outside the state updater so StrictMode's double call
             // can't skip a number or add the picture to the gallery twice
             const number = versionCounters.current[sessionId] ?? 1
@@ -460,7 +462,7 @@ export function useEditStudio({ settings, references, onResult }: Options) {
         const outcome = await editor.compose(version.local.whole.blob, options)
         if (outcome.kind === 'reject') return 'That left nothing of the edit — the picture would just be the one before it.'
         const image = await processImagePart(
-          { base64: await blobToBase64(outcome.blob), mimeType: 'image/png' },
+          { base64: '', mimeType: 'image/png', blob: outcome.blob },
           'png',
           { attempt: version.image.attempt, modelId: version.image.modelId },
         )
@@ -521,7 +523,7 @@ export function useEditStudio({ settings, references, onResult }: Options) {
       let image: GeneratedImage
       try {
         image = await processImagePart(
-          { base64: await blobToBase64(blob), mimeType: blob.type || 'image/png' },
+          { base64: '', mimeType: blob.type || 'image/png', blob },
           settings.format,
           { attempt: source.image.attempt, modelId: source.image.modelId },
         )
@@ -557,6 +559,26 @@ export function useEditStudio({ settings, references, onResult }: Options) {
     [sessions, settings.format, onResult, patchSession],
   )
 
+  // After the gallery is cleared nothing leads back to a chain any more, so
+  // the chains are let go of with it — except the one that is open or being
+  // worked on, which stays whole. Says what was dropped and what the chains
+  // that stay still hold, for the caller to free the one and spare the other.
+  const forgetIdle = useCallback((): { dropped: Held[]; kept: Held[] } => {
+    const stays = (id: string) => busyRef.current || id === openSessionId || id === runningTurn?.sessionId
+    const dropped: Held[] = []
+    const kept: Held[] = []
+    for (const session of Object.values(sessions)) {
+      ;(stays(session.id) ? kept : dropped).push(heldBySession(session))
+      if (stays(session.id)) continue
+      delete versionCounters.current[session.id]
+      for (const version of session.versions) wholeTaken.current.delete(version.id)
+    }
+    if (dropped.length > 0) {
+      setSessions((prev) => Object.fromEntries(Object.entries(prev).filter(([id]) => stays(id))))
+    }
+    return { dropped, kept }
+  }, [sessions, openSessionId, runningTurn])
+
   // A stop during preparation is honoured once the upload data is ready,
   // before anything is sent; afterwards it aborts the engine as usual
   const stop = useCallback(() => {
@@ -579,6 +601,7 @@ export function useEditStudio({ settings, references, onResult }: Options) {
       takeWholePicture,
       recut,
       isRecutting: recutting,
+      forgetIdle,
       stop,
       // While preparing, the engine's state still belongs to the last run
       runState: preparing ? null : run.runState,
@@ -596,6 +619,7 @@ export function useEditStudio({ settings, references, onResult }: Options) {
       takeWholePicture,
       recut,
       recutting,
+      forgetIdle,
       stop,
       preparing,
       run.runState,
@@ -603,6 +627,23 @@ export function useEditStudio({ settings, references, onResult }: Options) {
       runningTurn,
     ],
   )
+}
+
+// Everything a chain keeps alive: its versions' pictures, the model's whole
+// answers behind them, the "what was taken" tints and the arrow guides
+function heldBySession(session: EditSession): Held {
+  const held: Held = { urls: [], blobs: [] }
+  for (const version of session.versions) {
+    const picture = heldByImage(version.image)
+    held.urls.push(...picture.urls)
+    held.blobs.push(...picture.blobs)
+    if (version.local) {
+      held.urls.push(version.local.whole.objectUrl, version.local.areaUrl)
+      held.blobs.push(version.local.whole.blob)
+    }
+  }
+  for (const turn of session.turns) if (turn.guideUrl) held.urls.push(turn.guideUrl)
+  return held
 }
 
 // Asks where the things the arrows point at are. Never fails the edit: any

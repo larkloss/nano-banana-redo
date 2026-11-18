@@ -32,6 +32,9 @@ export function ImageCard({ image, index, onOpen, onEdit }: Props) {
               src={image.objectUrl}
               alt={image.uploaded ? `Uploaded ${index + 1}` : `Generated ${index + 1}`}
               loading="lazy"
+              // (a big picture is decoded off to the side instead of holding
+              // up the frame it scrolls into)
+              decoding="async"
               className="aspect-square w-full object-cover transition-transform duration-300 group-hover:scale-[1.03]"
             />
           </button>

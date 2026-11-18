@@ -11,6 +11,7 @@ import { RunBar } from './components/run/RunBar'
 import { Gallery } from './components/gallery/Gallery'
 import { EditStudio } from './components/studio/EditStudio'
 import { useEditStudio } from './hooks/useEditStudio'
+import { heldByImage, letGo } from './lib/release'
 import { applyTheme, loadTheme, type Theme } from './lib/theme'
 import { isMockMode } from './lib/mockGemini'
 import { getModel } from './lib/models'
@@ -147,6 +148,14 @@ function App() {
   }, [])
 
   // Warn before closing the tab mid-run (a generation or an edit)
+  // Clearing the gallery also frees the pictures: the bytes, the addresses
+  // they were shown from, and the edit chains nothing leads back to any more
+  const clearGallery = () => {
+    const { dropped, kept } = studio.forgetIdle()
+    letGo([...dropped, ...images.map(heldByImage)], kept)
+    clearImages()
+  }
+
   const anyRunning = isRunning || studio.isRunning
   useEffect(() => {
     if (!anyRunning) return
@@ -211,7 +220,7 @@ function App() {
         />
         <Gallery
           images={images}
-          onClear={clearImages}
+          onClear={clearGallery}
           onEdit={studio.open}
           onUpload={uploadPictures}
           pasteEnabled={!studio.openSession}

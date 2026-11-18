@@ -3,7 +3,7 @@ import type { ParsedImagePart, ParsedResponse } from '../types'
 import type { Frame } from './frame'
 import type { EditMark } from './annotate'
 import { base64ToBlob } from './imageUtils'
-import { blobToBase64 } from '../edit/lib/mask'
+import { keepOnDisk } from './blobStore'
 import {
   composeLocalEdit,
   prepareLocalEdit,
@@ -27,7 +27,7 @@ export interface LocalEditor {
   options: LocalEditOptions
   release(): void
   // Per composited answer, keyed by the composite's base64
-  extras: Map<string, { raw: ParsedImagePart; mask: Blob; info: LocalEditInfo }>
+  extras: WeakMap<ParsedImagePart, { whole: Blob; mask: Blob; info: LocalEditInfo }>
   // Set when an answer showed that this edit can't work this way at all
   // (the model won't keep the picture's shape) — the run stops with it
   problem: string | null
@@ -85,7 +85,7 @@ async function workerEditor(source: Blob, marks: EditMark[]): Promise<LocalEdito
       fail(new EditorDead('released'))
     },
     options: {},
-    extras: new Map(),
+    extras: new WeakMap(),
     problem: null,
   }
   return editor
@@ -104,7 +104,7 @@ async function inThreadEditor(source: Blob, marks: EditMark[]): Promise<LocalEdi
     },
     release: () => releaseLocalEdit(job),
     options: {},
-    extras: new Map(),
+    extras: new WeakMap(),
     problem: null,
   }
   return editor
@@ -133,25 +133,19 @@ export function makeLocalEditCaller(inner: GenerateCaller, editor: LocalEditor, 
   let framed: Pick<GenerateParams, 'settings' | 'references' | 'singleSourcePrompt'> | null = null
   type Answer =
     | { kind: 'empty'; parsed: ParsedResponse }
-    | { kind: 'done'; parsed: ParsedResponse; raw: ParsedImagePart; outcome: LocalComposite; size: [number, number] }
+    | { kind: 'done'; parsed: ParsedResponse; whole: Blob; outcome: LocalComposite }
 
   const attempt = async (params: GenerateParams, frame: Frame | null, signal: AbortSignal): Promise<Answer> => {
     const parsed = await inner(params, signal)
     if (parsed.images.length === 0) return { kind: 'empty', parsed }
-    let raw = parsed.images[0]
+    const raw = parsed.images[0]
     try {
-      let answer = base64ToBlob(raw.base64, raw.mimeType)
-      let size: [number, number] = [0, 0]
-      if (frame && framing) {
-        answer = await untilAborted(framing.unframe(answer, frame), signal)
-        raw = { base64: await blobToBase64(answer), mimeType: answer.type }
-      } else if (framing) {
-        const bitmap = await createImageBitmap(answer)
-        size = [bitmap.width, bitmap.height]
-        bitmap.close()
-      }
-      const outcome = await untilAborted(editor.compose(answer), signal)
-      return { kind: 'done', parsed, raw, outcome, size }
+      // The model's whole answer, as the bytes it sent (cut back out of the
+      // frame when it went in one)
+      let whole = raw.blob ?? base64ToBlob(raw.base64, raw.mimeType)
+      if (frame && framing) whole = await untilAborted(framing.unframe(whole, frame), signal)
+      const outcome = await untilAborted(editor.compose(whole), signal)
+      return { kind: 'done', parsed, whole, outcome }
     } catch (err) {
       if (signal.aborted || err instanceof EditorDead) throw err
       // An answer that can't be read is one failed attempt, not the end
@@ -165,7 +159,7 @@ export function makeLocalEditCaller(inner: GenerateCaller, editor: LocalEditor, 
     // Sent as it was, answered in another shape: the model's own. Send it
     // again inside a frame of that shape, which can be cut back out exactly.
     if (answer.kind === 'done' && answer.outcome.kind === 'reject' && answer.outcome.final && framing && !frame) {
-      const next = framing.frame ?? (await framing.reframe(answer.size[0], answer.size[1]))
+      const next = framing.frame ?? (await framing.reframe(...(await sizeOf(answer.whole))))
       if (next) {
         framing.frame = next
         framed = framed ?? (await framing.request(next))
@@ -174,7 +168,7 @@ export function makeLocalEditCaller(inner: GenerateCaller, editor: LocalEditor, 
       }
     }
     if (answer.kind === 'empty') return answer.parsed
-    const { parsed, raw, outcome } = answer
+    const { parsed, whole, outcome } = answer
     if (outcome.kind === 'reject') {
       if (outcome.final) {
         editor.problem = outcome.reason
@@ -183,10 +177,25 @@ export function makeLocalEditCaller(inner: GenerateCaller, editor: LocalEditor, 
       }
       return { images: [], finishReason: 'STOP', text: outcome.reason }
     }
-    const part: ParsedImagePart = { base64: await blobToBase64(outcome.blob), mimeType: outcome.blob.type }
+    // The composite travels on as the bytes the compositor wrote, not as text
+    // that would only be turned back into the same bytes
+    const part: ParsedImagePart = { base64: '', mimeType: outcome.blob.type, blob: outcome.blob }
+    const kept = await keepOnDisk(whole)
     if (signal.aborted) throw new DOMException('Stopped', 'AbortError')
-    editor.extras.set(part.base64, { raw, mask: outcome.mask, info: outcome.info })
+    editor.extras.set(part, { whole: kept, mask: outcome.mask, info: outcome.info })
     return { ...parsed, images: [part] }
+  }
+}
+
+// How big an answer is (asked only when it came back in the wrong shape)
+async function sizeOf(picture: Blob): Promise<[number, number]> {
+  try {
+    const bitmap = await createImageBitmap(picture)
+    const size: [number, number] = [bitmap.width, bitmap.height]
+    bitmap.close()
+    return size
+  } catch {
+    return [0, 0]
   }
 }
 

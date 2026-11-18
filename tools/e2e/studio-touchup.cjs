@@ -72,7 +72,7 @@ async function arrowAndApply(p, m) {
 async function diff(p, a, b, discs = []) {
   return p.evaluate(async ({ a, b, discs }) => {
     const imgs = [...document.querySelectorAll('[role=dialog] section img')]
-    const load = async (alt) => createImageBitmap(await (await fetch(imgs.find((i) => i.alt === alt).src)).blob())
+    const load = async (alt) => createImageBitmap(await (await fetch(((i) => i.dataset.full || i.src)(imgs.find((i) => i.alt === alt)))).blob())
     const [A, C] = [await load(a), await load(b)]
     const px = (bm) => { const cv = new OffscreenCanvas(bm.width, bm.height); const x = cv.getContext('2d'); x.drawImage(bm, 0, 0); return x.getImageData(0, 0, bm.width, bm.height).data }
     const pa = px(A), pc = px(C), W = A.width, H = A.height, unit = Math.min(W, H)
@@ -98,7 +98,7 @@ async function diff(p, a, b, discs = []) {
 async function disturbed(p, before, after, discs) {
   return p.evaluate(async ({ before, after, discs }) => {
     const imgs = [...document.querySelectorAll('[role=dialog] section img')]
-    const load = async (alt) => createImageBitmap(await (await fetch(imgs.find((i) => i.alt === alt).src)).blob())
+    const load = async (alt) => createImageBitmap(await (await fetch(((i) => i.dataset.full || i.src)(imgs.find((i) => i.alt === alt)))).blob())
     const [O, A, C] = [await load('Original'), await load(before), await load(after)]
     const px = (bm) => { const cv = new OffscreenCanvas(bm.width, bm.height); const x = cv.getContext('2d'); x.drawImage(bm, 0, 0); return x.getImageData(0, 0, bm.width, bm.height).data }
     const po = px(O), pa = px(A), pc = px(C), W = O.width, H = O.height, unit = Math.min(W, H)
@@ -203,7 +203,7 @@ async function disturbed(p, before, after, discs) {
     // the guarded face: [110,340,360,540] on 0-1000 of a 1024 px picture
     const face = await p.evaluate(async () => {
       const imgs = [...document.querySelectorAll('[role=dialog] section img')]
-      const load = async (alt) => createImageBitmap(await (await fetch(imgs.find((i) => i.alt === alt).src)).blob())
+      const load = async (alt) => createImageBitmap(await (await fetch(((i) => i.dataset.full || i.src)(imgs.find((i) => i.alt === alt)))).blob())
       const [A, C] = [await load('Original'), await load('Version 1')]
       const px = (bm) => { const cv = new OffscreenCanvas(bm.width, bm.height); const x = cv.getContext('2d'); x.drawImage(bm, 0, 0); return x.getImageData(0, 0, bm.width, bm.height).data }
       const pa = px(A), pc = px(C), W = A.width, H = A.height

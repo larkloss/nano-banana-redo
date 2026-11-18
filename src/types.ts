@@ -92,6 +92,10 @@ export interface GeneratedImage {
   kind: 'image' | 'video'
   blob: Blob
   objectUrl: string
+  // A small copy for tiles and lists only (pictures only, and only when the
+  // picture is bigger than one). Never what is shown large, downloaded,
+  // sent to a model or edited: that is always `blob` / `objectUrl`.
+  thumbUrl?: string
   width: number
   height: number
   // Seconds, video only
@@ -141,6 +145,10 @@ export interface RunState {
 export interface ParsedImagePart {
   base64: string
   mimeType: string
+  // The picture as the bytes themselves, when it was made here (a composite,
+  // a cut-out) rather than received as text: used as it is, and `base64` may
+  // then be empty
+  blob?: Blob
 }
 
 // ---------------------------------------------------------------------------

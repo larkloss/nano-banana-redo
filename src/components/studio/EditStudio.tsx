@@ -215,7 +215,9 @@ export function EditStudio({
 
   return (
     <div
-      className="fixed inset-0 z-40 flex items-stretch justify-center bg-black/50 p-3 backdrop-blur-sm md:p-6"
+      // (no blur of the page behind: it made every frame of typing and
+      // scrolling in here pay for redrawing the whole window)
+      className="fixed inset-0 z-40 flex items-stretch justify-center bg-black/75 p-3 md:p-6"
       // Closes only for a click that started on the backdrop — not a press on
       // the picture that happened to be released outside the dialog
       onPointerDownCapture={(e) => {
@@ -491,7 +493,15 @@ export function EditStudio({
                     v.id === selected.id ? 'border-blue-500' : 'border-transparent opacity-80 hover:opacity-100'
                   }`}
                 >
-                  <img src={v.image.objectUrl} alt={versionLabel(v)} className="h-16 w-16 object-cover" />
+                  <img
+                    src={v.image.thumbUrl ?? v.image.objectUrl}
+                    // (where the picture itself is, for the checks in tools/e2e)
+                    data-full={v.image.objectUrl}
+                    alt={versionLabel(v)}
+                    decoding="async"
+                    draggable={false}
+                    className="h-16 w-16 object-cover"
+                  />
                   <span className="absolute inset-x-0 bottom-0 bg-black/55 py-0.5 text-center text-[10px] font-medium text-white">
                     {v.number === 0 ? 'Original' : `v${v.number}`}
                   </span>
@@ -775,6 +785,8 @@ function TurnView({
             <img
               src={turn.guideUrl}
               alt="Where each change goes"
+              decoding="async"
+              draggable={false}
               className="mb-2 max-h-40 rounded-xl border border-white/20"
             />
           )}
@@ -853,7 +865,13 @@ function TurnView({
                   session.selectedVersionId === v.id ? 'border-blue-500' : 'border-transparent hover:border-zinc-600'
                 }`}
               >
-                <img src={v.image.objectUrl} alt={versionLabel(v)} className="h-20 w-20 object-cover" />
+                <img
+                  src={v.image.thumbUrl ?? v.image.objectUrl}
+                  alt={versionLabel(v)}
+                  decoding="async"
+                  draggable={false}
+                  className="h-20 w-20 object-cover"
+                />
                 <span className="absolute inset-x-0 bottom-0 bg-black/55 py-0.5 text-center text-[10px] text-white">
                   v{v.number}
                 </span>
