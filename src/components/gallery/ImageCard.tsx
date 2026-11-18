@@ -1,3 +1,4 @@
+import { useRef } from 'react'
 import type { GeneratedImage } from '../../types'
 import { getModel } from '../../lib/models'
 import { downloadImage, saveFormat, sourceLabel } from '../../lib/imageUtils'
@@ -12,6 +13,19 @@ interface Props {
 
 export function ImageCard({ image, index, onOpen, onEdit }: Props) {
   const time = new Date(image.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  // The card shows a reduced copy (a 4K picture decoded for every card made
+  // the page stall), but whatever takes the picture out of the page — a drag
+  // to the desktop, "Save image as", "Copy image" — must take the picture
+  // itself. So the picture itself is put in the moment a button goes down on
+  // it, before any of those can start, and the copy comes back once that was
+  // only a click or the drag is over.
+  const picture = useRef<HTMLImageElement>(null)
+  const show = (url: string | undefined) => {
+    const img = picture.current
+    if (img && url && image.cardUrl && img.getAttribute('src') !== url) img.src = url
+  }
+  const showItself = () => show(image.objectUrl)
+  const showCopy = () => show(image.cardUrl)
 
   return (
     <div className="soft-shadow group overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900">
@@ -27,14 +41,25 @@ export function ImageCard({ image, index, onOpen, onEdit }: Props) {
             className="aspect-video w-full bg-black"
           />
         ) : (
-          <button type="button" onClick={onOpen} className="block w-full cursor-zoom-in overflow-hidden">
+          <button
+            type="button"
+            onClick={() => {
+              showCopy()
+              onOpen()
+            }}
+            onPointerDown={showItself}
+            onContextMenu={showItself}
+            onDragStart={showItself}
+            onDragEnd={showCopy}
+            className="block w-full cursor-zoom-in overflow-hidden"
+          >
             <img
-              src={image.objectUrl}
+              ref={picture}
+              src={image.cardUrl ?? image.objectUrl}
+              // (where the picture itself is, for the checks in tools/e2e)
+              data-full={image.objectUrl}
               alt={image.uploaded ? `Uploaded ${index + 1}` : `Generated ${index + 1}`}
               loading="lazy"
-              // (a big picture is decoded off to the side instead of holding
-              // up the frame it scrolls into)
-              decoding="async"
               className="aspect-square w-full object-cover transition-transform duration-300 group-hover:scale-[1.03]"
             />
           </button>

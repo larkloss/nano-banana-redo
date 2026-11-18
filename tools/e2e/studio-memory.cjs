@@ -265,7 +265,7 @@ function probe() {
   observe('event', (e) => seen.events.push({ name: e.name, start: e.startTime, ms: e.duration, delay: e.processingStart - e.startTime, id: e.interactionId }), { durationThreshold: 16 })
   observe('element', (e) => seen.elements.push({ url: e.url, render: e.renderTime, load: e.loadTime }))
 
-  const stageImg = () => document.querySelector('[role=dialog] section img')
+  const stageImg = () => document.querySelector('[role=dialog] section img:not([aria-hidden])')
   // Resolves once `done()` gives something, looked at whenever the page changes
   const watch = (done) =>
     new Promise((resolve) => {
@@ -545,10 +545,10 @@ function canvasStage() {
     waiting.forEach((done) => done())
     waiting = []
   }
-  const stage = () => document.querySelector('[role=dialog] section:first-of-type img.object-contain')
+  const stage = () => document.querySelector('[role=dialog] section:first-of-type img.object-contain:not([aria-hidden])')
   window.__stageDrawn = (img) => new Promise((r) => (drawn === img.getAttribute('src') ? r() : waiting.push(r)))
   const style = document.createElement('style')
-  style.textContent = '[role=dialog] section:first-of-type img.object-contain { visibility: hidden !important }'
+  style.textContent = '[role=dialog] section:first-of-type img.object-contain:not([aria-hidden]) { visibility: hidden !important }'
   addEventListener('DOMContentLoaded', () => document.head.appendChild(style))
   const look = () => {
     const img = stage()

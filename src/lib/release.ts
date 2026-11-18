@@ -11,7 +11,8 @@ export interface Held {
 }
 
 export function heldByImage(image: GeneratedImage): Held {
-  return { urls: image.thumbUrl ? [image.objectUrl, image.thumbUrl] : [image.objectUrl], blobs: [image.blob] }
+  const urls = [image.objectUrl, image.thumbUrl, image.cardUrl].filter((url): url is string => Boolean(url))
+  return { urls, blobs: [image.blob] }
 }
 
 // Frees what `dropped` held, except anything `kept` still uses (a version of

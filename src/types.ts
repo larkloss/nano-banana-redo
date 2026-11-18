@@ -92,10 +92,13 @@ export interface GeneratedImage {
   kind: 'image' | 'video'
   blob: Blob
   objectUrl: string
-  // A small copy for tiles and lists only (pictures only, and only when the
-  // picture is bigger than one). Never what is shown large, downloaded,
-  // sent to a model or edited: that is always `blob` / `objectUrl`.
+  // Reduced copies for the places that show a picture small (pictures only,
+  // and only when the picture is bigger than the copy would be): a tiny one
+  // for tiles and lists, a mid-size one for the gallery card. Never what is
+  // shown large, downloaded, saved from the page, sent to a model or edited:
+  // that is always `blob` / `objectUrl`.
   thumbUrl?: string
+  cardUrl?: string
   width: number
   height: number
   // Seconds, video only

@@ -54,12 +54,14 @@ const stored = (p) => p.evaluate(() => new Promise((resolve, reject) => {
 // The bytes behind the first gallery picture, hashed in the page
 const shown = (p) => p.evaluate(async () => {
   const img = document.querySelector('main img[alt^="Generated"]')
+  // (the card shows a reduced copy; the picture itself is at data-full)
+  const src = img.dataset.full || img.src
   try {
-    const bytes = await (await fetch(img.src)).arrayBuffer()
+    const bytes = await (await fetch(src)).arrayBuffer()
     const hash = [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map((b) => b.toString(16).padStart(2, '0')).join('')
-    return { hash, bytes: bytes.byteLength, natural: img.naturalWidth, src: img.src }
+    return { hash, bytes: bytes.byteLength, natural: img.naturalWidth, src, card: img.getAttribute('src') }
   } catch (err) {
-    return { error: String(err), src: img.src }
+    return { error: String(err), src }
   }
 })
 
@@ -74,6 +76,31 @@ const shown = (p) => p.evaluate(async () => {
     check('a picture is stored once, whole', rows.length === 1 && rows[0].bytes === PICTURE.length && rows[0].type === 'image/png', JSON.stringify(rows))
     const first = await shown(a)
     check('what the gallery shows is the stored picture, byte for byte', first.hash === sha256(PICTURE) && first.natural > 0, `${first.bytes} bytes`)
+    // The card shows a reduced copy; whatever could take the picture out of
+    // the page gets the picture itself
+    check('the card shows a reduced copy of a big picture', first.card !== first.src && first.natural === 1024, `${first.natural} px wide`)
+    const card = a.locator('main img[alt^="Generated"]').first()
+    const box = await card.boundingBox()
+    await a.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+    await a.mouse.down({ button: 'right' })
+    const pressed = await card.evaluate((img) => ({ itself: img.getAttribute('src') === img.dataset.full }))
+    await a.mouse.up({ button: 'right' })
+    await a.keyboard.press('Escape')
+    check('a right press on the card puts the picture itself there (for "Save image as")', pressed.itself)
+    check('and it stays, for "Copy image" from the menu', await card.evaluate((img) => img.getAttribute('src') === img.dataset.full))
+    await a.mouse.down()
+    const held = await card.evaluate((img) => img.getAttribute('src') === img.dataset.full)
+    await a.mouse.up()
+    await a.waitForSelector('button:has-text("✕")')
+    const after = await card.evaluate((img) => img.getAttribute('src') !== img.dataset.full)
+    check('a left press does too (a drag may follow), and a plain click brings the copy back', held && after)
+    const large = await a.evaluate(() => {
+      const cardImg = document.querySelector('main img[alt^="Generated"]')
+      const big = [...document.querySelectorAll('img')].filter((i) => i !== cardImg && !i.hasAttribute('aria-hidden') && i.naturalWidth > 0).sort((x, y) => y.naturalWidth - x.naturalWidth)[0]
+      return { natural: big?.naturalWidth, itself: big?.getAttribute('src') === cardImg.dataset.full }
+    })
+    check('the large view shows the picture itself', large.itself && large.natural === 4096, JSON.stringify(large))
+    await a.keyboard.press('Escape')
     const download = a.waitForEvent('download')
     await a.locator('main button[title^="Download"], main button:has-text("Download")').first().click()
     const saved = fs.readFileSync(await (await download).path())

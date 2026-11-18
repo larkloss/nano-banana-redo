@@ -59,13 +59,13 @@ export async function processImagePart(
     // browser's download and preview treat it correctly
     blob = new Blob([raw], { type: actual })
   }
-  const [thumbUrl, kept] = await Promise.all([thumbnailUrl(bitmap), keepOnDisk(blob)])
+  const [small, kept] = await Promise.all([smallCopies(bitmap), keepOnDisk(blob)])
   const image: GeneratedImage = {
     id: crypto.randomUUID(),
     kind: 'image',
     blob: kept,
     objectUrl: URL.createObjectURL(kept),
-    ...(thumbUrl ? { thumbUrl } : {}),
+    ...small,
     width: bitmap.width,
     height: bitmap.height,
     mimeType,
@@ -83,6 +83,18 @@ export async function processImagePart(
 const THUMB_SHORT_SIDE = 256
 // (a very long, thin picture is not made huge to reach that)
 const THUMB_LONG_SIDE = 1024
+// The short side of the copy a gallery card shows: a card is a square of at
+// most some 400 px, so this fills it pixel for pixel on a 2x screen
+const CARD_SHORT_SIDE = 1024
+
+// The reduced copies a picture is shown from where it is shown small
+async function smallCopies(bitmap: ImageBitmap): Promise<Pick<GeneratedImage, 'thumbUrl' | 'cardUrl'>> {
+  const [thumbUrl, cardUrl] = await Promise.all([
+    thumbnailUrl(bitmap),
+    thumbnailUrl(bitmap, CARD_SHORT_SIDE, Infinity, 0.9),
+  ])
+  return { ...(thumbUrl ? { thumbUrl } : {}), ...(cardUrl ? { cardUrl } : {}) }
+}
 
 // A small copy of a picture for the places that show it tiny, so that a strip
 // of twenty versions does not have twenty full-size pictures decoded behind
@@ -93,6 +105,7 @@ export async function thumbnailUrl(
   source: ImageBitmap | Blob,
   shortSide = THUMB_SHORT_SIDE,
   longSide = THUMB_LONG_SIDE,
+  quality = 0.85,
 ): Promise<string | undefined> {
   let opened: ImageBitmap | null = null
   let small: ImageBitmap | null = null
@@ -112,7 +125,7 @@ export async function thumbnailUrl(
     const canvas = new OffscreenCanvas(width, height)
     canvas.getContext('2d')!.drawImage(small, 0, 0)
     // (WebP keeps transparency; a browser that can't write it gives a PNG)
-    const blob = await canvas.convertToBlob({ type: 'image/webp', quality: 0.85 })
+    const blob = await canvas.convertToBlob({ type: 'image/webp', quality })
     canvas.width = canvas.height = 0
     return URL.createObjectURL(blob)
   } catch {
@@ -221,13 +234,13 @@ export async function uploadToImage(file: File): Promise<{ image: GeneratedImage
         blob = await canvas.convertToBlob({ type: 'image/png' })
       }
     }
-    const [thumbUrl, kept] = await Promise.all([thumbnailUrl(bitmap), keepOnDisk(blob)])
+    const [small, kept] = await Promise.all([smallCopies(bitmap), keepOnDisk(blob)])
     const image: GeneratedImage = {
       id: crypto.randomUUID(),
       kind: 'image',
       blob: kept,
       objectUrl: URL.createObjectURL(kept),
-      ...(thumbUrl ? { thumbUrl } : {}),
+      ...small,
       width,
       height,
       mimeType: blob.type,
