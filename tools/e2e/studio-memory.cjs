@@ -21,10 +21,13 @@
 //                         hide-gallery   gallery pictures not painted while the studio is open
 //                         no-blur        no backdrop blur behind the studio
 //                         thumbs         the same previews (and gallery) shown from small copies
+//                         canvas-stage   the stage picture drawn into a canvas, not shown by its <img>
 //   --idle S            seconds to sit idle with the studio closed (30)
 //   --heap              after the last round: a heap snapshot (largest objects and what holds
 //                       them) and the browser's own account of its memory, per allocator
+//   --dumps             the browser's own account, per allocator, with every memory reading
 //   --trace             trace each of the last interactions: picture decodes, raster, frames
+//   --profile           CPU profile of the last edit: where the page's main thread spends it
 //   --picture FILE      the picture to start from (the compositor bench's 4K astronaut)
 //   --channel NAME      another browser build (e.g. chromium: the full browser, new headless)
 //   --args "A B"        extra command-line switches for the browser under test
@@ -42,7 +45,11 @@
 //
 // Memory is PSS from /proc/<pid>/smaps_rollup for every process of the
 // browser under test (found from its own --user-data-dir), after a forced GC.
-// Linux only.
+// Linux only. Headless Chromium draws without a GPU: decoded pictures sit in
+// the page's own process (as memory the browser gives back when short), and
+// the blur behind the studio costs tens of ms a frame — on a desktop with a
+// GPU both differ, so read timings against --experiment no-blur, or run
+// --headed there.
 const { chromium } = require('playwright')
 const crypto = require('crypto')
 const fs = require('fs')
@@ -64,6 +71,7 @@ const EXPERIMENTS = {
   'hide-gallery': { css: 'body:has([role=dialog]) main img { visibility: hidden !important }' },
   'no-blur': { css: '.backdrop-blur-sm { -webkit-backdrop-filter: none !important; backdrop-filter: none !important }' },
   thumbs: { script: thumbnailPreviews },
+  'canvas-stage': { script: canvasStage },
 }
 
 const sha256 = (data) => crypto.createHash('sha256').update(data).digest('hex')
@@ -73,7 +81,7 @@ const MB = (bytes) => +(bytes / 1048576).toFixed(1)
 
 function parseArgs(argv) {
   const o = { rounds: 12, size: '2048', tag: '', out: '', idle: 30, experiment: '', picture: DEFAULT_PICTURE, channel: '', args: '' }
-  const flags = ['whole', 'no-arrows', 'heap', 'trace', 'headed']
+  const flags = ['whole', 'no-arrows', 'heap', 'dumps', 'trace', 'profile', 'headed']
   for (let i = 0; i < argv.length; i++) {
     const key = argv[i].replace(/^--/, '')
     if (key === 'compare') o.compare = [argv[++i], argv[++i]]
@@ -284,7 +292,9 @@ function probe() {
     const t = { commit: now() }
     if (!img.complete) await new Promise((r) => img.addEventListener('load', r, { once: true }))
     t.load = now()
-    await img.decode().catch(() => {})
+    // (an experiment that shows the stage picture another way says when it has)
+    if (window.__stageDrawn) await window.__stageDrawn(img)
+    else await img.decode().catch(() => {})
     t.decoded = now()
     await frame()
     await frame()
@@ -330,7 +340,6 @@ function probe() {
       }
       return { live: urls.size, bytes, byType, ...counts }
     },
-    urlSize: (url) => urls.get(url)?.size ?? null,
     // Pictures in the page: how much they come to when decoded in full, and
     // how much the sizes they are shown at would need
     dom: () => {
@@ -440,7 +449,8 @@ function probe() {
         // only exist from 16 ms up; anything faster counts as 8)
         const byId = new Map()
         for (const e of seen.events) if (e.start >= typing.from && e.id) byId.set(e.id, Math.max(byId.get(e.id) ?? 0, e.ms))
-        const paints = typing.frame.map((_, i) => [...byId.values()][i] ?? 8)
+        const paints = [...byId.values()]
+        while (paints.length < typing.frame.length) paints.push(8)
         return { keys: typing.frame.length, inputDelayMs: stats(typing.delay), toFrameMs: stats(typing.frame), toPaintMs: stats(paints), slowEvents: byId.size, ...window_(typing.from, now()) }
       },
     },
@@ -497,6 +507,54 @@ function thumbnailPreviews() {
       }
     }
   }).observe(document, { subtree: true, childList: true, attributes: true, attributeFilter: ['src'] })
+}
+
+// --experiment canvas-stage: the stage's <img> is kept (the app measures and
+// labels it) but never painted; the picture is decoded once into an
+// ImageBitmap, drawn into a canvas laid over it at the size it is shown, and
+// the bitmap is closed. Tells what the browser keeps for pictures shown by an
+// <img> — on screen this is not the app's own scaling, so not a fix as it is.
+function canvasStage() {
+  const canvas = document.createElement('canvas')
+  canvas.style.cssText = 'position:absolute;pointer-events:none'
+  let drawn = null
+  let waiting = []
+  const draw = async (img) => {
+    const src = img.getAttribute('src')
+    const place = () => {
+      canvas.style.left = `${img.offsetLeft}px`
+      canvas.style.top = `${img.offsetTop}px`
+      canvas.style.width = `${img.clientWidth}px`
+      canvas.style.height = `${img.clientHeight}px`
+    }
+    if (canvas.previousSibling !== img) img.after(canvas)
+    if (drawn === src) return place()
+    const bitmap = await createImageBitmap(await (await fetch(src)).blob())
+    if (img.getAttribute('src') !== src) return bitmap.close()
+    if (!img.complete) await new Promise((r) => img.addEventListener('load', r, { once: true }))
+    place()
+    canvas.width = Math.round(img.clientWidth * devicePixelRatio)
+    canvas.height = Math.round(img.clientHeight * devicePixelRatio)
+    const ctx = canvas.getContext('2d')
+    ctx.imageSmoothingQuality = 'high'
+    ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height)
+    bitmap.close()
+    drawn = src
+    waiting.forEach((done) => done())
+    waiting = []
+  }
+  const stage = () => document.querySelector('[role=dialog] section:first-of-type img.object-contain')
+  window.__stageDrawn = (img) => new Promise((r) => (drawn === img.getAttribute('src') ? r() : waiting.push(r)))
+  const style = document.createElement('style')
+  style.textContent = '[role=dialog] section:first-of-type img.object-contain { visibility: hidden !important }'
+  addEventListener('DOMContentLoaded', () => document.head.appendChild(style))
+  const look = () => {
+    const img = stage()
+    if (img) void draw(img)
+    else drawn = null
+  }
+  new MutationObserver(look).observe(document, { subtree: true, childList: true, attributes: true, attributeFilter: ['src'] })
+  addEventListener('resize', look)
 }
 
 // ---- Memory of the browser under test -------------------------------------
@@ -564,12 +622,8 @@ function processMemory(profile) {
 
 async function run(o) {
   if (!fs.existsSync(APP)) throw new Error(`${APP} is missing — npm run build:single`)
-  const picture = fs.existsSync(o.picture) ? o.picture : null
-  if (!picture) log(`(${o.picture} is missing: starting from a drawn picture instead)`)
   const painter = await createPainter()
-  log(`painting the ${o.width}×${o.height} picture to start from`)
-  const base = await painter.base(picture, o.width, o.height)
-
+  // (its own profile directory is how the browser's processes are told apart)
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'nbr-studio-memory-'))
   const context = await chromium.launchPersistentContext(profile, {
     viewport: VIEWPORT,
@@ -578,10 +632,45 @@ async function run(o) {
     ...(o.channel ? { channel: o.channel } : {}),
     ...(o.args ? { args: o.args.split(/\s+/).filter(Boolean) } : {}),
   })
+  try {
+    const result = await session(o, painter, context, profile)
+    fs.writeFileSync(o.out, JSON.stringify(result, null, 1))
+    log(`invariants ${result.invariants.digest.slice(0, 16)}… · page errors: ${result.errors.length} · written to ${o.out}`)
+  } finally {
+    await context.close().catch(() => {})
+    await painter.close().catch(() => {})
+    fs.rmSync(profile, { recursive: true, force: true })
+  }
+}
+
+// Playwright keeps the inspector's Network domain switched on, and with it
+// the page's process keeps a base64 copy of the pictures it has loaded (about
+// 200 MB of them before it lets go) — memory no user's browser holds. Those
+// buffers are set to nothing, on Playwright's own session with the page; if
+// its internals have moved, the run goes on and says so in its results.
+async function withoutInspectorCopies(page) {
+  try {
+    const session = page._connection.toImpl(page).delegate._mainFrameSession._client
+    await session.send('Network.enable', { maxTotalBufferSize: 0, maxResourceBufferSize: 0 })
+    return true
+  } catch {
+    log('(could not switch off the inspector’s copies of loaded pictures: the renderer’s memory will include them)')
+    return false
+  }
+}
+
+// One session in the browser under test, from the first picture to the last reading
+async function session(o, painter, context, profile) {
+  const picture = fs.existsSync(o.picture) ? o.picture : null
+  if (!picture) log(`(${o.picture} is missing: starting from a drawn picture instead)`)
+  log(`painting the ${o.width}×${o.height} picture to start from`)
+  const base = await painter.base(picture, o.width, o.height)
+
   const page = context.pages()[0] ?? (await context.newPage())
   const errors = []
   page.on('pageerror', (e) => errors.push(e.message))
   page.on('console', (m) => m.type() === 'error' && errors.push(m.text()))
+  const inspectorCopies = !(await withoutInspectorCopies(page))
   const cdp = await context.newCDPSession(page)
   const browserCdp = await context.browser().newBrowserCDPSession()
   await cdp.send('Performance.enable')
@@ -653,6 +742,8 @@ async function run(o) {
       picture: { from: picture ? path.basename(path.dirname(picture)) + '/' + path.basename(picture) : 'drawn', sha256: sha256(base), bytes: base.length },
       browser: (await browserCdp.send('Browser.getVersion')).product,
       headless: !o.headed,
+      // (true would mean the renderer's numbers include the inspector's copies of loaded pictures)
+      inspectorCopies,
       gpu: { device: system.gpu.devices[0]?.deviceString ?? null, features: system.gpu.featureStatus ?? null },
       viewport: VIEWPORT,
       cpus: os.cpus().length,
@@ -665,6 +756,12 @@ async function run(o) {
     errors,
   }
 
+  // What the browser itself says its memory is made of, right now
+  const memoryDump = async () => {
+    await tracing.start(['disabled-by-default-memory-infra'])
+    await browserCdp.send('Tracing.requestMemoryDump', { levelOfDetail: 'detailed' })
+    return summariseMemoryDump(await tracing.stop())
+  }
   // One reading of everything, after things have settled and a forced GC
   const sample = async (label, extra = {}) => {
     await sleep(1000)
@@ -686,6 +783,7 @@ async function run(o) {
       dom: await page.evaluate(() => window.__probe.dom()),
       urls: await page.evaluate(() => window.__probe.urls()),
     }
+    if (o.dumps) s.allocators = await memoryDump()
     result.samples.push(s)
     const t = s.memory.byType
     log(
@@ -788,12 +886,20 @@ async function run(o) {
       .waitForFunction(() => /Gave up after|Something went wrong|could not be decoded|can’t be pasted|already running/.test(document.querySelector('[role=dialog]')?.innerText ?? ''), null, { timeout: 0 })
       .then(() => 'failed')
     failed.catch(() => {})
+    // (with --profile, the last edit is sampled from "Apply edit" to the turn's end)
+    const profiled = o.profile && n === o.rounds
+    if (profiled) {
+      await cdp.send('Profiler.enable')
+      await cdp.send('Profiler.setSamplingInterval', { interval: 500 })
+      await cdp.send('Profiler.start')
+    }
     const appliedAt = await page.evaluate(() => window.__probe.epoch())
     await page.locator('[role=dialog] button:has-text("Apply edit")').click()
     const t = await Promise.race([shown, failed])
     if (t === 'failed') throw new Error(`round ${n} did not produce a version:\n${(await dialogText()).slice(-600)}`)
     await page.locator('[role=dialog] button:has-text("Apply edit")').waitFor({ timeout: 0 })
     const doneAt = await page.evaluate(() => window.__probe.epoch())
+    if (profiled) result.profile = summariseProfile((await cdp.send('Profiler.stop')).profile)
     const mine = requests.slice(sent)
     const fakeMs = mine.reduce((a, r) => a + (r.fulfilledAt - r.at), 0)
     const entry = {
@@ -892,9 +998,7 @@ async function run(o) {
   result.objects = await liveObjects(cdp)
   if (o.heap) {
     log('taking a memory dump and a heap snapshot')
-    await tracing.start(['disabled-by-default-memory-infra'])
-    await browserCdp.send('Tracing.requestMemoryDump', { levelOfDetail: 'detailed' })
-    result.allocators = summariseMemoryDump(await tracing.stop())
+    result.allocators = await memoryDump()
     result.heap = await heapSnapshot(cdp)
   }
   // What goes when the browser is told memory is short: caches, not leaks
@@ -906,11 +1010,6 @@ async function run(o) {
   result.invariants = { sent: sentPictures, stages, download: downloaded, digest: sha256(JSON.stringify([sentPictures, stages, downloaded])) }
   result.requests = requests.map(({ at, answeredAt, fulfilledAt, ...r }) => ({ ...r, answerMs: answeredAt - at }))
 
-  await context.close()
-  await painter.close()
-  fs.rmSync(profile, { recursive: true, force: true })
-  fs.writeFileSync(o.out, JSON.stringify(result, null, 1))
-  log(`invariants ${result.invariants.digest.slice(0, 16)}… · page errors: ${errors.length} · written to ${o.out}`)
   return result
 }
 
@@ -1026,6 +1125,30 @@ async function heapSnapshot(cdp) {
     largest: order.slice(0, 30).map((i) => ({ MB: MB(sizeOf(i)), type: typeOf(i), name: short(nameOf(i), 50), heldBy: heldBy(i) })),
     detachedNodes: Object.entries(detached).sort((a, b) => b[1] - a[1]).slice(0, 12),
   }
+}
+
+// A CPU profile of the page's main thread, boiled down: the functions most
+// time was spent in themselves, with where they are in the built page (its
+// code is minified, so a piece of the source says more than the name)
+function summariseProfile(profile) {
+  const lines = fs.readFileSync(APP, 'utf8').split('\n')
+  const self = new Map()
+  profile.samples.forEach((id, i) => self.set(id, (self.get(id) ?? 0) + (profile.timeDeltas[i] ?? 0)))
+  const byFunction = new Map()
+  let total = 0
+  for (const node of profile.nodes) {
+    const ms = (self.get(node.id) ?? 0) / 1000
+    const f = node.callFrame
+    if (f.functionName === '(idle)') continue
+    total += ms
+    const key = `${f.functionName}|${f.url}|${f.lineNumber}|${f.columnNumber}`
+    const entry = byFunction.get(key) ?? { name: f.functionName || '(anonymous)', ms: 0, at: f.url ? `${f.lineNumber + 1}:${f.columnNumber + 1}` : 'native', source: '' }
+    if (f.url && f.url.startsWith('file:') && lines[f.lineNumber]) entry.source = lines[f.lineNumber].slice(f.columnNumber, f.columnNumber + 110)
+    entry.ms += ms
+    byFunction.set(key, entry)
+  }
+  const top = [...byFunction.values()].sort((a, b) => b.ms - a.ms).slice(0, 14)
+  return { busyMs: Math.round(total), top: top.map((e) => ({ ...e, ms: Math.round(e.ms) })) }
 }
 
 // ---- Traces -----------------------------------------------------------------
