@@ -22,10 +22,12 @@
 //                         no-blur        no backdrop blur behind the studio
 //                         thumbs         the same previews (and gallery) shown from small copies
 //   --idle S            seconds to sit idle with the studio closed (30)
-//   --heap              heap snapshot after the last round: largest objects and what holds them
-//   --trace             trace the last interactions: picture decodes, raster, frames
+//   --heap              after the last round: a heap snapshot (largest objects and what holds
+//                       them) and the browser's own account of its memory, per allocator
+//   --trace             trace each of the last interactions: picture decodes, raster, frames
 //   --picture FILE      the picture to start from (the compositor bench's 4K astronaut)
 //   --channel NAME      another browser build (e.g. chromium: the full browser, new headless)
+//   --args "A B"        extra command-line switches for the browser under test
 //   --headed            with a window
 //   --compare A B       no run: compares two result files (invariants, memory, timings)
 //
@@ -70,7 +72,7 @@ const log = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a)
 const MB = (bytes) => +(bytes / 1048576).toFixed(1)
 
 function parseArgs(argv) {
-  const o = { rounds: 12, size: '2048', tag: '', out: '', idle: 30, experiment: '', picture: DEFAULT_PICTURE, channel: '' }
+  const o = { rounds: 12, size: '2048', tag: '', out: '', idle: 30, experiment: '', picture: DEFAULT_PICTURE, channel: '', args: '' }
   const flags = ['whole', 'no-arrows', 'heap', 'trace', 'headed']
   for (let i = 0; i < argv.length; i++) {
     const key = argv[i].replace(/^--/, '')
@@ -450,33 +452,35 @@ function probe() {
 // stage and the zoomed view keep the real picture.
 function thumbnailPreviews() {
   const made = new Map()
+  const thumbnails = new Set()
   const small = (src) => {
     if (!made.has(src))
       made.set(
         src,
         (async () => {
           const blob = await (await fetch(src)).blob()
-          const probe = await createImageBitmap(blob)
-          const scale = Math.min(1, 256 / Math.max(probe.width, probe.height))
-          const bitmap = await createImageBitmap(blob, { resizeWidth: Math.round(probe.width * scale), resizeHeight: Math.round(probe.height * scale), resizeQuality: 'high' })
-          probe.close()
-          const canvas = new OffscreenCanvas(bitmap.width, bitmap.height)
-          canvas.getContext('2d').drawImage(bitmap, 0, 0)
-          bitmap.close()
-          return URL.createObjectURL(await canvas.convertToBlob({ type: 'image/jpeg', quality: 0.85 }))
+          const full = await createImageBitmap(blob)
+          const scale = Math.min(1, 256 / Math.max(full.width, full.height))
+          const canvas = new OffscreenCanvas(Math.round(full.width * scale), Math.round(full.height * scale))
+          const ctx = canvas.getContext('2d')
+          ctx.imageSmoothingQuality = 'high'
+          ctx.drawImage(full, 0, 0, canvas.width, canvas.height)
+          full.close()
+          const url = URL.createObjectURL(await canvas.convertToBlob({ type: 'image/jpeg', quality: 0.85 }))
+          thumbnails.add(url)
+          return url
         })(),
       )
     return made.get(src)
   }
-  const isPreview = (img) => img.matches('main img, [role=dialog] section:first-of-type div.overflow-x-auto img, [role=dialog] section:nth-of-type(2) img')
+  const previews = 'main img, [role=dialog] section:first-of-type div.overflow-x-auto img, [role=dialog] section:nth-of-type(2) img'
   const swap = (img) => {
     const src = img.getAttribute('src')
-    if (!src || !src.startsWith('blob:') || img.dataset.full === src || [...made.values()].includes(src)) return
-    img.dataset.full = src
+    if (!src || !src.startsWith('blob:') || thumbnails.has(src)) return
     // (not shown, and so not decoded, until the small copy is there)
     img.style.visibility = 'hidden'
     void small(src).then((url) => {
-      if (img.dataset.full !== src) return
+      if (img.getAttribute('src') !== src) return
       img.src = url
       img.style.visibility = ''
     })
@@ -484,15 +488,15 @@ function thumbnailPreviews() {
   new MutationObserver((records) => {
     for (const record of records) {
       if (record.type === 'attributes') {
-        if (record.target.tagName === 'IMG' && isPreview(record.target) && !String(record.target.getAttribute('src')).includes(record.oldValue ?? '\0')) swap(record.target)
-      } else {
-        for (const node of record.addedNodes) {
-          if (node.nodeType !== 1) continue
-          for (const img of node.tagName === 'IMG' ? [node] : node.querySelectorAll('img')) if (isPreview(img)) swap(img)
-        }
+        if (record.target.matches(previews)) swap(record.target)
+        continue
+      }
+      for (const node of record.addedNodes) {
+        if (node.nodeType !== 1) continue
+        for (const img of node.matches('img') ? [node] : node.querySelectorAll('img')) if (img.matches(previews)) swap(img)
       }
     }
-  }).observe(document, { subtree: true, childList: true, attributes: true, attributeFilter: ['src'], attributeOldValue: true })
+  }).observe(document, { subtree: true, childList: true, attributes: true, attributeFilter: ['src'] })
 }
 
 // ---- Memory of the browser under test -------------------------------------
@@ -510,7 +514,7 @@ function browserProcesses(profile) {
       // (gone in the meantime)
     }
   }
-  const root = table.find((p) => p.cmdline.includes(`--user-data-dir=${profile}`) && !p.cmdline.some((a) => a.startsWith('--type=')))
+  const root = table.find((p) => p.cmdline.includes(`--user-data-dir=${profile}`) && !p.cmdline.join(' ').includes(' --type='))
   if (!root) throw new Error('the browser under test is not running')
   const ours = new Set([root.pid])
   for (let grew = true; grew; ) {
@@ -524,7 +528,9 @@ function browserProcesses(profile) {
   return table
     .filter((p) => ours.has(p.pid))
     .map((p) => {
-      const flag = (name) => (p.cmdline.find((a) => a.startsWith(`--${name}=`)) ?? '').split('=')[1] ?? ''
+      // (child processes carry their whole command line as one string)
+      const line = p.cmdline.join(' ')
+      const flag = (name) => (line.match(new RegExp(`--${name}=(\\S+)`)) ?? ['', ''])[1]
       const type = flag('type')
       return {
         pid: p.pid,
@@ -570,6 +576,7 @@ async function run(o) {
     headless: !o.headed,
     acceptDownloads: true,
     ...(o.channel ? { channel: o.channel } : {}),
+    ...(o.args ? { args: o.args.split(/\s+/).filter(Boolean) } : {}),
   })
   const page = context.pages()[0] ?? (await context.newPage())
   const errors = []
@@ -579,6 +586,7 @@ async function run(o) {
   const browserCdp = await context.browser().newBrowserCDPSession()
   await cdp.send('Performance.enable')
   await cdp.send('HeapProfiler.enable')
+  const tracing = tracer(browserCdp)
 
   const css = o.experiments.map((name) => EXPERIMENTS[name].css).filter(Boolean).join('\n')
   await page.addInitScript(probe)
@@ -842,15 +850,23 @@ async function run(o) {
   }
 
   const last = o.rounds
-  let trace = null
-  if (o.trace) await context.browser().startTracing(page, { categories: ['cc', 'gpu', 'viz', 'blink', 'devtools.timeline', 'disabled-by-default-devtools.timeline', 'disabled-by-default-devtools.timeline.frame'] })
+  // (with --trace, each interaction is traced on its own: what the browser
+  // spent its time on while it ran — slower than without, so not for timings)
+  const traces = {}
+  const traced = async (name, work) => {
+    if (!o.trace) return work()
+    await tracing.start(TIMELINE_CATEGORIES)
+    const value = await work()
+    traces[name] = summariseTrace(await tracing.stop())
+    return value
+  }
   log('timing interactions after the last round')
   // every version once (first time on the stage for most), then back and forth
   const visits = [...Array(last).keys(), last, last - 1, last, 0, last]
   const end = {
-    typing: await typingRun(),
-    switching: await switchingRun(visits),
-    threadScroll: await scrollRun(THREAD),
+    typing: await traced('typing', () => typingRun()),
+    switching: await traced('switching', () => switchingRun(visits)),
+    threadScroll: await traced('threadScroll', () => scrollRun(THREAD)),
   }
   await sample('after interactions', { round: last })
   Object.assign(
@@ -863,9 +879,8 @@ async function run(o) {
       }
     }),
   )
-  if (o.trace) trace = summariseTrace(JSON.parse((await context.browser().stopTracing()).toString()))
   result.responsiveness.end = end
-  if (trace) result.trace = trace
+  if (o.trace) result.trace = traces
   await sample('studio reopened', { round: last })
 
   // A real download of the last version
@@ -876,7 +891,10 @@ async function run(o) {
   // What the page's script still holds
   result.objects = await liveObjects(cdp)
   if (o.heap) {
-    log('taking a heap snapshot')
+    log('taking a memory dump and a heap snapshot')
+    await tracing.start(['disabled-by-default-memory-infra'])
+    await browserCdp.send('Tracing.requestMemoryDump', { levelOfDetail: 'detailed' })
+    result.allocators = summariseMemoryDump(await tracing.stop())
     result.heap = await heapSnapshot(cdp)
   }
   // What goes when the browser is told memory is short: caches, not leaks
@@ -1010,11 +1028,78 @@ async function heapSnapshot(cdp) {
   }
 }
 
-// A trace, boiled down: time per kind of work that matters here, per process
-function summariseTrace(trace) {
-  const events = trace.traceEvents ?? trace
-  const process = {}
-  for (const e of events) if (e.ph === 'M' && e.name === 'process_name') process[e.pid] = e.args.name
+// ---- Traces -----------------------------------------------------------------
+
+const TIMELINE_CATEGORIES = ['cc', 'viz', 'blink', 'devtools.timeline', 'disabled-by-default-devtools.timeline', 'disabled-by-default-devtools.timeline.frame']
+
+// The browser's tracing, from start() to stop(), as a list of events
+function tracer(browserCdp) {
+  return {
+    start: (categories) => browserCdp.send('Tracing.start', { transferMode: 'ReturnAsStream', traceConfig: { includedCategories: categories, excludedCategories: ['*'] } }),
+    stop: async () => {
+      const complete = new Promise((r) => browserCdp.once('Tracing.tracingComplete', r))
+      await browserCdp.send('Tracing.end')
+      const { stream } = await complete
+      const chunks = []
+      for (;;) {
+        const part = await browserCdp.send('IO.read', { handle: stream, size: 8 << 20 })
+        chunks.push(part.base64Encoded ? Buffer.from(part.data, 'base64') : Buffer.from(part.data))
+        if (part.eof) break
+      }
+      await browserCdp.send('IO.close', { handle: stream })
+      const trace = JSON.parse(Buffer.concat(chunks).toString())
+      return trace.traceEvents ?? trace
+    },
+  }
+}
+
+const processNames = (events) => {
+  const names = {}
+  for (const e of events) if (e.ph === 'M' && e.name === 'process_name') names[e.pid] = e.args.name
+  return names
+}
+
+// The browser's own account of its memory (a memory-infra dump): per process,
+// MB per allocator — what the process totals read from /proc are made of.
+// Allocators overlap in places (a cache entry is also a malloc block).
+function summariseMemoryDump(events) {
+  const names = processNames(events)
+  const processes = {}
+  for (const e of events) {
+    const allocators = e.ph === 'v' && e.args?.dumps?.allocators
+    if (!allocators) continue
+    // (one process's dump can come in several events)
+    const tree = (processes[`${names[e.pid] ?? 'process'} ${e.pid}`] ??= {})
+    for (const [name, dump] of Object.entries(allocators)) {
+      let level = tree
+      let node = null
+      for (const part of name.split('/')) {
+        node = level[part] ??= { own: null, under: {} }
+        level = node.under
+      }
+      if (dump.attrs?.size) node.own = parseInt(dump.attrs.size.value, 16)
+    }
+  }
+  // a node's size is its own, or failing that the sum of what is under it
+  const sizeOf = (node) => node.own ?? Object.values(node.under).reduce((a, n) => a + sizeOf(n), 0)
+  const out = {}
+  for (const [name, tree] of Object.entries(processes)) {
+    const rows = {}
+    for (const [top, node] of Object.entries(tree)) {
+      if (sizeOf(node) >= 1 << 20) rows[top] = MB(sizeOf(node))
+      // one level down where it says something (which partition, which cache)
+      for (const [child, sub] of Object.entries(node.under)) {
+        if (sizeOf(sub) >= 4 << 20 && !/^segment_|^[0-9a-f]{16,}$/i.test(child)) rows[`${top}/${child}`] = MB(sizeOf(sub))
+      }
+    }
+    out[name] = Object.fromEntries(Object.entries(rows).sort((x, y) => y[1] - x[1]))
+  }
+  return out
+}
+
+// A timeline trace, boiled down: time per kind of work that matters here, per process
+function summariseTrace(events) {
+  const process = processNames(events)
   const wanted = /^(ImageDecodeTask|Decode Image|Decode LazyPixelRef|Draw LazyPixelRef|Resize Image|RasterTask|ImageUploadTask|Paint|PrePaint|Layout|UpdateLayoutTree|FunctionCall|EventDispatch|Commit|DrawFrame|DroppedFrame|RunTask|CompositeLayers|Layerize)$/
   const totals = {}
   for (const e of events) {
@@ -1049,7 +1134,7 @@ function compare(fileA, fileB) {
     const differing = flat(a).filter(([k, v]) => other.get(k) !== v).map(([k]) => k)
     console.log(`  first differences: ${differing.slice(0, 6).join(' · ') || '(a different number of requests or versions)'}`)
   }
-  const row = (cells) => console.log(cells.map((c, i) => String(c).padEnd(i === 0 ? 34 : 24)).join(''))
+  const row = (cells) => console.log(cells.map((c, i) => String(c).padEnd(i === 0 ? 32 : 40)).join(''))
   const cell = (s) => (s ? `${s.memory.totalPssMB} (r ${s.memory.byType.renderer?.pssMB ?? 0}, b ${s.memory.byType.browser?.pssMB ?? 0}, g ${s.memory.byType.gpu?.pssMB ?? 0})` : '—')
   console.log('\nmemory, MB of PSS: total (renderer, browser, gpu)')
   row(['', a.meta.tag, b.meta.tag])
