@@ -42,6 +42,8 @@ export function Lightbox({ images, index, onClose, onNavigate, onEdit }: Props) 
 
   return (
     <div
+      // (Ctrl + wheel zooms the picture from anywhere in here: see useZoom)
+      data-zoom-scope
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-6"
       onClick={onClose}
     >

@@ -10,13 +10,16 @@ interface PaneProps {
   // From the same useZoom call
   paneRef: Ref<HTMLDivElement>
   contentRef: Ref<HTMLDivElement>
+  // The picture moved under a pointer that stayed where it was
+  onScroll?: () => void
   children: ReactNode
 }
 
-export function ZoomPane({ zoom, paneRef, contentRef, children }: PaneProps) {
+export function ZoomPane({ zoom, paneRef, contentRef, onScroll, children }: PaneProps) {
   return (
     <div
       ref={paneRef}
+      onScroll={onScroll}
       data-zoom-pane
       // touch-none: two fingers pinch the picture, not the page
       className="absolute inset-0 touch-none"

@@ -75,8 +75,22 @@ export function useZoom({ resetKey, overscroll = 0 }: Options) {
     setZoom(1)
   }
 
-  // The zoom at which one picture pixel takes one screen pixel
-  const actual = fit && natural && fit.width > 0 ? Math.max(1, natural.width / fit.width) : 1
+  // Screen pixels per CSS pixel (2 on a Retina display, 1.25–2 on a scaled
+  // Windows one): "real size" is counted in the screen's own pixels, or it
+  // would be a smoothed enlargement there
+  const [density, setDensity] = useState(() => window.devicePixelRatio || 1)
+  useEffect(() => {
+    const query = window.matchMedia(`(resolution: ${density}dppx)`)
+    const update = () => setDensity(window.devicePixelRatio || 1)
+    query.addEventListener('change', update)
+    return () => query.removeEventListener('change', update)
+  }, [density])
+
+  // The zoom at which one picture pixel takes one screen pixel. Below 1 when
+  // the fitted picture is already larger than that (a small picture on a
+  // dense screen)
+  const real = fit && natural && fit.width > 0 ? natural.width / (fit.width * density) : 1
+  const actual = Math.max(1, real)
   const max = Math.max(8, 4 * actual)
 
   // What the event handlers go by. `shown` is the level on screen; `zoom` is
@@ -129,8 +143,12 @@ export function useZoom({ resetKey, overscroll = 0 }: Options) {
     if (last.current) last.current = { ...last.current, left: scroller.scrollLeft, top: scroller.scrollTop, width: rect.width }
   }, [])
 
-  const width = fit ? fit.width * zoom : 0
-  const height = fit ? fit.height * zoom : 0
+  // At fit, exactly the fitted box. Zoomed, the height follows the picture's
+  // own shape (the fitted box is rounded to layout pixels, which would grow
+  // with the zoom), and at real size both are the picture's own size exactly
+  const atActual = natural !== null && real >= 1.01 && Math.abs(zoom - real) <= real * 0.001
+  const width = !fit ? 0 : atActual ? natural.width / density : fit.width * zoom
+  const height = !fit ? 0 : zoom === 1 || !natural || !natural.width ? fit.height * zoom : (width * natural.height) / natural.width
   useLayoutEffect(settle, [settle, width, height])
 
   const request = useCallback(
@@ -384,7 +402,11 @@ export function useZoom({ resetKey, overscroll = 0 }: Options) {
       if (!pan) setHand('off')
     }
 
-    viewport.addEventListener('wheel', onWheel, { passive: false })
+    // (on what holds the pane and the buttons and labels laid over it: with
+    // the pointer resting on one of those, Ctrl + wheel would otherwise zoom
+    // the whole browser page)
+    const scope = viewport.closest<HTMLElement>('[data-zoom-scope]') ?? viewport.parentElement ?? viewport
+    scope.addEventListener('wheel', onWheel, { passive: false })
     viewport.addEventListener('pointerdown', onDown, true)
     viewport.addEventListener('pointermove', onMove, true)
     viewport.addEventListener('pointerup', onUp, true)
@@ -394,7 +416,7 @@ export function useZoom({ resetKey, overscroll = 0 }: Options) {
     window.addEventListener('keyup', onKeyUp)
     window.addEventListener('blur', onBlur)
     return () => {
-      viewport.removeEventListener('wheel', onWheel)
+      scope.removeEventListener('wheel', onWheel)
       viewport.removeEventListener('pointerdown', onDown, true)
       viewport.removeEventListener('pointermove', onMove, true)
       viewport.removeEventListener('pointerup', onUp, true)
@@ -447,14 +469,14 @@ export function useZoom({ resetKey, overscroll = 0 }: Options) {
     width,
     height,
     // Of the picture's own pixels: 100 is one picture pixel per screen pixel
-    percent: fit && natural ? Math.round((zoom / actual) * 100) : null,
+    percent: fit && natural ? Math.round((zoom / real) * 100) : null,
     overscroll: zoomed ? overscroll : 0,
     // 'ready' while Space is held over the picture, 'dragging' while it is being moved
     hand,
     canZoomIn: zoom < max,
     canZoomOut: zoomed,
     // Real size is its own level only when the fitted picture is smaller than that
-    canActual: actual > 1.005 && Math.abs(zoom - actual) > actual * 0.001,
+    canActual: real >= 1.01 && Math.abs(zoom - real) > real * 0.001,
     zoomIn,
     zoomOut,
     toFit,

@@ -87,7 +87,11 @@ export function MarkedImage({
   // finger of a pinch (see `press`)
   const tap = useRef<{ id: number; x: number; y: number } | null>(null)
   // Where the next touch-up would land (shows its size before the click)
-  const [hover, setHover] = useState<{ x: number; y: number } | null>(null)
+  // Where the touch-up ring is, and the zoom it was put there at: once the
+  // picture has moved under a still pointer (a scroll, a zoom step by key)
+  // the ring would be somewhere the next click does not go, so it is not
+  // shown again until the pointer moves
+  const [hover, setHover] = useState<{ x: number; y: number; zoom: number } | null>(null)
 
   const toPicture = (e: React.PointerEvent, svg: Element) => {
     const rect = svg.getBoundingClientRect()
@@ -149,7 +153,7 @@ export function MarkedImage({
         draggable={false}
         className="pointer-events-none invisible max-h-full max-w-full object-contain"
       />
-      <ZoomPane zoom={zoom} paneRef={paneRef} contentRef={contentRef}>
+      <ZoomPane zoom={zoom} paneRef={paneRef} contentRef={contentRef} onScroll={() => setHover(null)}>
         <img src={src} alt={alt} className="block h-full w-full object-contain" draggable={false} />
         {box && overlayUrl && (
           <img
@@ -221,7 +225,7 @@ export function MarkedImage({
             }}
             onPointerUp={(e) => lift(e, touchUp.onAdd)}
             onPointerCancel={() => (tap.current = null)}
-            onPointerMove={(e) => setHover(toPicture(e, e.currentTarget))}
+            onPointerMove={(e) => setHover({ ...toPicture(e, e.currentTarget), zoom: zoom.zoom })}
             onPointerLeave={() => setHover(null)}
           >
             {[...touchUp.applied.map((t) => ({ t, fresh: false })), ...touchUp.pending.map((t) => ({ t, fresh: true }))].map(
@@ -239,7 +243,7 @@ export function MarkedImage({
                 />
               ),
             )}
-            {hover && (
+            {hover && hover.zoom === zoom.zoom && (
               <circle
                 cx={hover.x * box.width}
                 cy={hover.y * box.height}
@@ -290,8 +294,11 @@ export function MarkedImage({
               const tail = arrowTail(mark, aspect)
               const tx = mark.x * box.width
               const ty = mark.y * box.height
-              const sx = tail.x * box.width
-              const sy = tail.y * box.height
+              // The shaft keeps the length it has at fit: zoomed in, an arrow
+              // drawn to scale would run right across the view, its number
+              // far off screen (the guide the model gets is drawn separately)
+              const sx = (mark.x + (tail.x - mark.x) / zoom.zoom) * box.width
+              const sy = (mark.y + (tail.y - mark.y) / zoom.zoom) * box.height
               const angle = Math.atan2(ty - sy, tx - sx)
               const head = Math.max(10, unit * 0.035)
               const tagR = Math.max(10, unit * 0.03)

@@ -54,8 +54,8 @@ const PIC = ' img:not([aria-hidden])'
 
 // A page with `count` pictures in the gallery; the first image request gets
 // the case's original, later ones its "result"
-async function open(browser, kase, { viewport = { width: 1440, height: 950 }, count = 2, touch = false } = {}) {
-  const context = await browser.newContext({ viewport, hasTouch: touch, isMobile: touch })
+async function open(browser, kase, { viewport = { width: 1440, height: 950 }, count = 2, touch = false, scale = 1 } = {}) {
+  const context = await browser.newContext({ viewport, hasTouch: touch, isMobile: touch, deviceScaleFactor: scale })
   const p = await context.newPage()
   const errors = []; p.on('pageerror', (e) => errors.push(e.message)); p.on('console', (m) => m.type() === 'error' && errors.push(m.text()))
   let calls = 0
@@ -128,7 +128,9 @@ async function marks(p) {
     const [tip, wing] = [at(pts[0]), at(pts[1])]
     const tag = g.querySelector('circle').getBoundingClientRect()
     const stroke = +g.querySelectorAll('line')[1].getAttribute('stroke-width') * m.a
-    return { x: +g.dataset.markX, y: +g.dataset.markY, tip, head: Math.hypot(tip.x - wing.x, tip.y - wing.y), tag: tag.width, stroke }
+    // (the shaft: from the tip to the middle of the number tag)
+    const shaft = Math.hypot(tip.x - (tag.x + tag.width / 2), tip.y - (tag.y + tag.height / 2))
+    return { x: +g.dataset.markX, y: +g.dataset.markY, tip, head: Math.hypot(tip.x - wing.x, tip.y - wing.y), tag: tag.width, stroke, shaft }
   }))
 }
 
@@ -491,6 +493,43 @@ async function marks(p) {
     await p.mouse.click(8, 8)
     check('large view: a click beside the fitted picture still closes it', (await p.locator(LARGE).count()) === 0)
     check('no page errors in the large view', errors.length === 0, errors.join(' | '))
+    await p.close()
+  }
+
+  // ---- 6. What a review found: the arrow's length on screen, Ctrl + wheel over the buttons, real size on a dense screen
+  {
+    const { p, errors } = await open(browser, 'A-4k__mild', { count: 1 })
+    await openStudio(p)
+    const fit = await view(p, STAGE)
+    await p.mouse.click(fit.x + fit.w * 0.4, fit.y + fit.h * 0.6)
+    await frame(p)
+    const [atFit] = await marks(p)
+    await p.locator('[role=dialog] h2, [role=dialog] header').first().click({ position: { x: 5, y: 5 } }).catch(() => undefined)
+    await press(p, '[role=dialog]', 'Zoom in', 4)
+    const [zoomedIn] = await marks(p)
+    check('studio: an arrow keeps its length on screen when zoomed (its number stays next to its tip)', near(zoomedIn.shaft, atFit.shaft, 1), `${r2(atFit.shaft)} px at fit, ${r2(zoomedIn.shaft)} px at ×${r2((await view(p, STAGE)).w / fit.w)}`)
+    await press(p, '[role=dialog]', 'Fit the whole')
+    const group = await p.locator('[role=dialog] [role=group][aria-label=Zoom]').boundingBox()
+    await p.mouse.move(group.x + group.width / 2, group.y + group.height / 2)
+    const prevented = await p.evaluate(([x, y]) => {
+      const event = new WheelEvent('wheel', { deltaY: -100, ctrlKey: true, bubbles: true, cancelable: true, clientX: x, clientY: y })
+      document.elementFromPoint(x, y).dispatchEvent(event)
+      return event.defaultPrevented
+    }, [group.x + group.width / 2, group.y + group.height / 2])
+    await frame(p)
+    const wheeled = await view(p, STAGE)
+    check('studio: Ctrl + wheel with the pointer on the zoom buttons zooms the picture, not the browser page', prevented && wheeled.w > fit.w * 1.1, `prevented ${prevented}, ×${r2(wheeled.w / fit.w)}`)
+    check('no page errors', errors.length === 0, errors.join(' | '))
+    await p.close()
+  }
+  for (const scale of [2, 1.5]) {
+    const { p } = await open(browser, 'A-4k__mild', { count: 1, scale })
+    await openLarge(p)
+    const fit = await view(p, LARGE)
+    check(`dense screen (${scale}x): the level counts screen pixels`, fit.label === `${Math.round((fit.w * scale / fit.nw) * 100)}%`, `${fit.label} at fit, ${r2(fit.w * scale)} screen px for ${fit.nw}`)
+    await press(p, '.fixed.z-50', 'Zoom to 100%')
+    const real = await view(p, LARGE)
+    check(`dense screen (${scale}x): 100% is one picture pixel per screen pixel`, near(real.w * scale, real.nw, 0.05) && near(real.h * scale, real.nh, 0.05) && real.label === '100%', `${r2(real.w * scale)}×${r2(real.h * scale)} screen px for ${real.nw}×${real.nh}, label ${real.label}`)
     await p.close()
   }
 
