@@ -348,12 +348,20 @@ export function exportBlob(image: GeneratedImage): Promise<Blob> {
   }
   let pending = encoded.get(image.blob)
   if (!pending) {
-    pending = toFullColourJpeg(image.blob, SAVE_QUALITY)
+    // (kept on disk like the picture itself: after "Download all" there is
+    // one of these for every edit result)
+    pending = toFullColourJpeg(image.blob, SAVE_QUALITY).then(keepOnDisk)
     encoded.set(image.blob, pending)
     // a failed encode is not remembered
     pending.catch(() => encoded.delete(image.blob))
   }
   return pending
+}
+
+// The encoded copy made for saving a picture, if there is one (to free it
+// together with the picture)
+export function exportedCopy(blob: Blob): Promise<Blob> | undefined {
+  return encoded.get(blob)
 }
 
 // What the download will be, for labels

@@ -314,6 +314,8 @@ function probe() {
       longTasks: tasks.length,
       longTaskMs: Math.round(tasks.reduce((a, t) => a + t.ms, 0)),
       worstTaskMs: Math.round(Math.max(0, ...tasks.map((t) => t.ms))),
+      // (each long task: ms after `from`, and how long it took)
+      tasks: tasks.map((t) => [Math.round(t.start - from), Math.round(t.ms)]),
       longFrames: frames.length,
       worstFrameMs: Math.round(Math.max(0, ...frames.map((f) => f.ms))),
       blockingMs: Math.round(frames.reduce((a, f) => a + f.blocking, 0)),

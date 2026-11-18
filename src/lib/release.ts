@@ -1,5 +1,6 @@
 import type { GeneratedImage } from '../types'
 import { releaseFromDisk } from './blobStore'
+import { exportedCopy } from './imageUtils'
 
 // What a picture (or a whole edit chain) keeps alive in the browser: the
 // addresses it is shown from, and the bytes behind them. An address keeps
@@ -25,5 +26,7 @@ export function letGo(dropped: Held[], kept: Held[]): void {
   setTimeout(() => {
     for (const url of urls) URL.revokeObjectURL(url)
     releaseFromDisk(blobs)
+    // (and the copies encoded for saving them)
+    for (const blob of blobs) void exportedCopy(blob)?.then((copy) => releaseFromDisk([copy]), () => undefined)
   }, 2000)
 }
