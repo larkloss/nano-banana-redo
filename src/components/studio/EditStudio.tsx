@@ -334,7 +334,8 @@ export function EditStudio({
                         : versionLabel(selected)}
               </span>
               {busyHere && (
-                <span className="absolute right-3 top-3 flex items-center gap-1.5 rounded-full bg-black/60 px-2.5 py-1 text-[11px] text-white">
+                // (under the zoom buttons, which have the corner)
+                <span className="absolute right-3 top-14 flex items-center gap-1.5 rounded-full bg-black/60 px-2.5 py-1 text-[11px] text-white">
                   <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-blue-400" /> editing…
                 </span>
               )}
