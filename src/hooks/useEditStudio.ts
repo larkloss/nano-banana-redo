@@ -61,6 +61,8 @@ export interface EditTurn {
   marks: EditMark[]
   // The marked-up copy that was sent alongside the picture (for display)
   guideUrl: string | null
+  // A small copy of it, for the chat bubble
+  guideSmallUrl?: string
   sourceVersionId: string
   withReferences: boolean
   // Keep everything away from the arrows exactly as it was
@@ -282,12 +284,13 @@ export function useEditStudio({ settings, references, onResult }: Options) {
           // The bubble shows the arrows on the user's own picture, not on a frame
           const shown = framing?.frame ? await renderGuide(source.image.blob, turn.marks) : request.guide
           if (shown) {
-            // (a small copy: the bubble shows it at most 160 px tall, and one
-            // stays on screen for every turn of the chain)
-            const guideUrl = (await thumbnailUrl(shown.blob, 480, 960)) ?? URL.createObjectURL(shown.blob)
+            const guideUrl = URL.createObjectURL(shown.blob)
+            // (the bubble shows it at most 160 px tall, and one stays on
+            // screen for every turn of the chain: a small copy is what it shows)
+            const guideSmallUrl = await thumbnailUrl(shown.blob, 480, 960)
             patchSession(sessionId, (s) => ({
               ...s,
-              turns: s.turns.map((t) => (t.id === turn.id ? { ...t, guideUrl } : t)),
+              turns: s.turns.map((t) => (t.id === turn.id ? { ...t, guideUrl, guideSmallUrl } : t)),
             }))
           }
           if (cancelledRef.current) throw new StoppedBeforeStart()
@@ -642,7 +645,10 @@ function heldBySession(session: EditSession): Held {
       held.blobs.push(version.local.whole.blob)
     }
   }
-  for (const turn of session.turns) if (turn.guideUrl) held.urls.push(turn.guideUrl)
+  for (const turn of session.turns) {
+    if (turn.guideUrl) held.urls.push(turn.guideUrl)
+    if (turn.guideSmallUrl) held.urls.push(turn.guideSmallUrl)
+  }
   return held
 }
 

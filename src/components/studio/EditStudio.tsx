@@ -12,6 +12,7 @@ import { DEFAULT_LOCATOR_MODEL, LOCATOR_MODELS } from '../../lib/locate'
 import { loadApiKeys, loadStudioPrefs, saveStudioPrefs } from '../../lib/storage'
 import { isMockMode } from '../../lib/mockGemini'
 import { MarkedImage, type FoundBox } from './MarkedImage'
+import { PreviewImage } from '../common/PreviewImage'
 import { MarkList } from './MarkList'
 
 interface Props {
@@ -75,7 +76,6 @@ export function EditStudio({
   // Held-down views of the stage: the version it came from, the model's own
   // whole picture, or the area that was replaced
   const [peek, setPeek] = useState<null | 'before' | 'whole' | 'area'>(null)
-  const comparing = peek !== null
   // Edits with arrows keep everything away from them pixel-identical
   const [localOnly, setLocalOnly] = useState(true)
   // Arrows pointed at the picture, each with its own instruction. Positions
@@ -108,6 +108,19 @@ export function EditStudio({
   const previous = selectedTurn ? session.versions.find((v) => v.id === selectedTurn.sourceVersionId) : null
   const shown = peek === 'before' && previous ? previous : selected
   const shownUrl = peek === 'whole' && selected.local ? selected.local.whole.objectUrl : shown.image.objectUrl
+  // What is on the stage right now. A different picture (another version, a
+  // held "before") is decoded off to the side first and put on the stage when
+  // it is ready — put there undecoded, a 4K picture holds the whole page still
+  // for up to a second. Until then the picture before it stays, and so does
+  // everything that names or annotates it: the label, the tint, the boxes.
+  const stage = useOnStage(shownUrl, peek, selected.id)
+  const staged = session.versions.find((v) => v.id === stage.versionId) ?? selected
+  const stagedTurn = session.turns.find((t) => t.id === staged.turnId)
+  const stagedBefore = stagedTurn ? session.versions.find((v) => v.id === stagedTurn.sourceVersionId) : null
+  // (the picture on the stage is the selected version's own or one held from
+  // it: what belongs to the selected version can be drawn on it)
+  const caughtUp = staged.id === selected.id
+  const plain = stage.peek === null
   const hold = (view: 'before' | 'whole' | 'area') => ({
     onPointerDown: () => setPeek(view),
     onPointerUp: () => setPeek(null),
@@ -281,15 +294,17 @@ export function EditStudio({
           <section className="flex min-h-0 flex-col gap-3 p-4">
             <div className="relative flex min-h-[240px] flex-1 items-center justify-center overflow-hidden rounded-2xl bg-zinc-900">
               <MarkedImage
-                src={shownUrl}
-                alt={versionLabel(shown)}
+                src={stage.src}
+                alt={versionLabel(stage.peek === 'before' && stagedBefore ? stagedBefore : staged)}
                 marks={touching ? [] : marks}
                 activeId={activeMark}
-                interactive={!comparing}
-                overlayUrl={peek === 'area' || (touching && !comparing) ? selected.local?.areaUrl : null}
-                boxes={peek === 'area' || (touching && !comparing) ? foundBoxes : undefined}
+                interactive={plain}
+                overlayUrl={
+                  stage.peek === 'area' ? staged.local?.areaUrl : touching && caughtUp && plain ? selected.local?.areaUrl : null
+                }
+                boxes={caughtUp && (stage.peek === 'area' || (touching && plain)) ? foundBoxes : undefined}
                 touchUp={
-                  touching && selected.local && !comparing
+                  touching && selected.local && caughtUp && plain
                     ? {
                         applied: selected.local.options.touches ?? [],
                         pending: touching.picked,
@@ -309,7 +324,7 @@ export function EditStudio({
                 onMove={(id, x, y) => updateMark(id, { x, y })}
                 onActivate={setActiveMark}
               />
-              {!comparing && (
+              {plain && (
                 <span className="pointer-events-none absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full bg-black/60 px-3 py-1 text-[11px] text-white">
                   {touching
                     ? touching.take
@@ -323,15 +338,15 @@ export function EditStudio({
                 </span>
               )}
               <span className="absolute left-3 top-3 rounded-full bg-black/60 px-2.5 py-1 text-[11px] font-medium text-white">
-                {peek === 'before' && previous
-                  ? `Before · ${versionLabel(previous)}`
-                  : peek === 'whole'
+                {stage.peek === 'before' && stagedBefore
+                  ? `Before · ${versionLabel(stagedBefore)}`
+                  : stage.peek === 'whole'
                     ? 'The model’s whole picture'
-                    : peek === 'area'
+                    : stage.peek === 'area'
                       ? 'Replaced area'
-                      : touching
+                      : touching && caughtUp
                         ? `Touching up ${versionLabel(selected)}`
-                        : versionLabel(selected)}
+                        : versionLabel(staged)}
               </span>
               {busyHere && (
                 // (under the zoom buttons, which have the corner)
@@ -494,13 +509,10 @@ export function EditStudio({
                     v.id === selected.id ? 'border-blue-500' : 'border-transparent opacity-80 hover:opacity-100'
                   }`}
                 >
-                  <img
-                    src={v.image.thumbUrl ?? v.image.objectUrl}
-                    // (where the picture itself is, for the checks in tools/e2e)
-                    data-full={v.image.objectUrl}
+                  <PreviewImage
+                    full={v.image.objectUrl}
+                    small={v.image.thumbUrl}
                     alt={versionLabel(v)}
-                    decoding="async"
-                    draggable={false}
                     className="h-16 w-16 object-cover"
                   />
                   <span className="absolute inset-x-0 bottom-0 bg-black/55 py-0.5 text-center text-[10px] font-medium text-white">
@@ -783,11 +795,10 @@ function TurnView({
       <div className="flex justify-end">
         <div className="max-w-[90%] rounded-2xl rounded-br-md bg-blue-600 px-3.5 py-2 text-sm text-white">
           {turn.guideUrl && (
-            <img
-              src={turn.guideUrl}
+            <PreviewImage
+              full={turn.guideUrl}
+              small={turn.guideSmallUrl}
               alt="Where each change goes"
-              decoding="async"
-              draggable={false}
               className="mb-2 max-h-40 rounded-xl border border-white/20"
             />
           )}
@@ -866,11 +877,10 @@ function TurnView({
                   session.selectedVersionId === v.id ? 'border-blue-500' : 'border-transparent hover:border-zinc-600'
                 }`}
               >
-                <img
-                  src={v.image.thumbUrl ?? v.image.objectUrl}
+                <PreviewImage
+                  full={v.image.objectUrl}
+                  small={v.image.thumbUrl}
                   alt={versionLabel(v)}
-                  decoding="async"
-                  draggable={false}
                   className="h-20 w-20 object-cover"
                 />
                 <span className="absolute inset-x-0 bottom-0 bg-black/55 py-0.5 text-center text-[10px] text-white">
@@ -1027,4 +1037,30 @@ function versionLabel(v: EditVersion): string {
 function editPrompt(session: EditSession, v: EditVersion): string {
   const turn = session.turns.find((t) => t.id === v.turnId)
   return turn ? summarizeEdit(turn.prompt, turn.marks) : ''
+}
+
+type Peek = null | 'before' | 'whole' | 'area'
+
+// The picture the stage shows: the one asked for once the browser has it
+// decoded, the one before it until then (see where it is used). The same
+// picture under another view — the tint over it, say — needs no wait.
+function useOnStage(src: string, peek: Peek, versionId: string): { src: string; peek: Peek; versionId: string } {
+  const [shown, setShown] = useState({ src, peek, versionId })
+  useEffect(() => {
+    let live = true
+    const swap = () => {
+      if (!live) return
+      setShown((was) =>
+        was.src === src && was.peek === peek && was.versionId === versionId ? was : { src, peek, versionId },
+      )
+    }
+    const next = new Image()
+    next.src = src
+    if (typeof next.decode === 'function') next.decode().then(swap, swap)
+    else swap()
+    return () => {
+      live = false
+    }
+  }, [src, peek, versionId])
+  return shown.src === src ? { src, peek, versionId } : shown
 }

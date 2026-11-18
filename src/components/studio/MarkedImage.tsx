@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 import { MAX_MARKS, arrowTail, markColor, type EditMark } from '../../lib/annotate'
 import { useZoom } from '../common/useZoom'
 import { ZoomButtons, ZoomPane } from '../common/ZoomPane'
@@ -67,29 +67,6 @@ interface Drag {
   startY: number
   moved: boolean
 }
-// The picture on the stage. Another one (a different version, a held
-// "before") is decoded off to the side first and swapped in when it is ready:
-// put on screen undecoded, a 4K picture holds the whole page still for up to
-// a second while it is. Until then the one before it stays, so nothing
-// flashes. The same picture, from the same address — only when it appears.
-function useDecoded(src: string, alt: string): { src: string; alt: string } {
-  const [shown, setShown] = useState({ src, alt })
-  useEffect(() => {
-    let live = true
-    const swap = () => {
-      if (live) setShown((was) => (was.src === src && was.alt === alt ? was : { src, alt }))
-    }
-    const next = new Image()
-    next.src = src
-    if (typeof next.decode === 'function') next.decode().then(swap, swap)
-    else swap()
-    return () => {
-      live = false
-    }
-  }, [src, alt])
-  return shown
-}
-
 export function MarkedImage({
   src,
   alt,
@@ -157,7 +134,6 @@ export function MarkedImage({
   const unit = zoom.fit ? Math.min(zoom.fit.width, zoom.fit.height) : 0
   // (a touch-up spot is a piece of the picture: that does grow with it)
   const drawnUnit = box ? Math.min(box.width, box.height) : 0
-  const onStage = useDecoded(src, alt)
   const cursor = zoom.hand === 'dragging' ? 'grabbing' : zoom.hand === 'ready' ? 'grab' : 'crosshair'
 
   return (
@@ -174,7 +150,7 @@ export function MarkedImage({
         className="pointer-events-none invisible max-h-full max-w-full object-contain"
       />
       <ZoomPane zoom={zoom} paneRef={paneRef} contentRef={contentRef}>
-        <img src={onStage.src} alt={onStage.alt} className="block h-full w-full object-contain" draggable={false} />
+        <img src={src} alt={alt} className="block h-full w-full object-contain" draggable={false} />
         {box && overlayUrl && (
           <img
             aria-hidden

@@ -3,7 +3,7 @@ import type { ParsedImagePart, ParsedResponse } from '../types'
 import type { Frame } from './frame'
 import type { EditMark } from './annotate'
 import { base64ToBlob } from './imageUtils'
-import { keepOnDisk } from './blobStore'
+import { keepOnDisk, releaseFromDisk } from './blobStore'
 import {
   composeLocalEdit,
   prepareLocalEdit,
@@ -181,7 +181,11 @@ export function makeLocalEditCaller(inner: GenerateCaller, editor: LocalEditor, 
     // that would only be turned back into the same bytes
     const part: ParsedImagePart = { base64: '', mimeType: outcome.blob.type, blob: outcome.blob }
     const kept = await keepOnDisk(whole)
-    if (signal.aborted) throw new DOMException('Stopped', 'AbortError')
+    if (signal.aborted) {
+      // (stopped while it was being stored: nothing will ever show it)
+      releaseFromDisk([kept])
+      throw new DOMException('Stopped', 'AbortError')
+    }
     editor.extras.set(part, { whole: kept, mask: outcome.mask, info: outcome.info })
     return { ...parsed, images: [part] }
   }

@@ -18,6 +18,9 @@ const STORE = 'blobs'
 const LOCK_PREFIX = 'nano-banana-pictures:'
 // Below this a picture is not worth the round trip (previews, masks, guides)
 const MIN_BYTES = 256 * 1024
+// A store that has not answered by now is given up on: the picture stays in
+// memory, and so do the ones after it
+const PATIENCE_MS = 15000
 
 const session =
   typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : String(Math.random()).slice(2)
@@ -126,8 +129,22 @@ export function tidyPictureStore(): void {
 
 // The same picture, held on disk rather than in memory when that is possible:
 // resolves to a Blob with the same bytes and type, or to the one given
-export async function keepOnDisk(blob: Blob): Promise<Blob> {
-  if (blob.size < MIN_BYTES || stored.has(blob)) return blob
+export function keepOnDisk(blob: Blob): Promise<Blob> {
+  if (blob.size < MIN_BYTES || stored.has(blob)) return Promise.resolve(blob)
+  return new Promise((resolve) => {
+    // (a failing store is handled inside; this is for one that says nothing)
+    const giveUp = setTimeout(() => {
+      opening = Promise.resolve(null)
+      resolve(blob)
+    }, PATIENCE_MS)
+    void store(blob).then((kept) => {
+      clearTimeout(giveUp)
+      resolve(kept)
+    })
+  })
+}
+
+async function store(blob: Blob): Promise<Blob> {
   try {
     const db = await open()
     if (!db) return blob
