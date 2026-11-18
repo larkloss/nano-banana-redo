@@ -60,6 +60,13 @@ npm run dev
   going. Note: Gemini rate limits are per Google Cloud *project*, so the two keys must come
   from different projects to actually double throughput
 - **Gallery**: lightbox view, per-image download, download-all as zip
+- **Zoom**: the large view and the edit studio's stage have − / + / Fit / 100% buttons;
+  Ctrl/⌘ + wheel or a pinch zooms about the pointer, a drag pans. Zoom is display only
+- **Light on memory**: while the tab is open, pictures are kept in the browser's own storage
+  for the page (IndexedDB — on your device, never uploaded) instead of in memory, and lists
+  and cards show reduced copies; the large view, downloads and what is sent to the model are
+  always the picture itself. The stored pictures are deleted when the gallery is cleared or
+  the tab is closed (left-overs are removed the next time the app starts)
 - Settings, prompt, and API key persist across reloads (localStorage)
 
 ## Retry behavior
