@@ -279,22 +279,134 @@ const SHAPE_REJECT = 'the model changed the picture’s shape'
 // Colour of the "what changed" overlay (RGBA)
 const OVERLAY_TINT = [217, 70, 239, 140]
 
+// Takes over `result`: it is closed as soon as it has been read, so the caller
+// must not use it afterwards (closing it again does no harm).
+//
+// A 4K picture is 64 MB each time it is held decoded, so the steps below are
+// separate functions on purpose: what a step only needed on the way is out of
+// reach when it returns, instead of staying until the whole composite is done.
 export async function composeLocalEdit(
   job: LocalEditJob,
   result: ImageBitmap,
   options: LocalEditOptions = {},
 ): Promise<LocalComposite> {
   const { W, H, w, h } = job
-  const n = w * h
+  const sx = w / W
+  const sy = h / H
+
+  let placed: Placed | null
+  try {
+    placed = placeAnswer(job, result)
+  } finally {
+    // From here on only the extended copy is read
+    result.close()
+  }
+  if (!placed) return { kind: 'reject', reason: SHAPE_REJECT, final: true }
+  const { answer, fit } = placed
+
+  const featherFull = Math.max(2, FEATHER * Math.min(W, H))
+  const roomFull = Math.max(6, SEAM_ROOM * Math.min(W, H))
+  const found = await findAreas(job, placed, options, featherFull, roomFull)
+  if ('reject' in found) {
+    discard(answer.canvas)
+    return { kind: 'reject', reason: found.reject }
+  }
+
+  const out = new OffscreenCanvas(W, H)
+  const octx = out.getContext('2d', { willReadFrequently: true })!
+  octx.drawImage(job.original, 0, 0)
+  const overlay = new OffscreenCanvas(w, h)
+  const ovctx = overlay.getContext('2d')!
+  let takenFull = 0
+
+  for (let k = 1; k <= found.clusters; k++) {
+    // 3. Seam per changed area, at a finer crop resolution
+    const seam = seamAround(job, answer, found, k, fit, featherFull, roomFull)
+    if (!seam) continue
+    const { cx0, cy0, cropW, cropH, cw, ch, region } = seam
+
+    // 4. Blend at full resolution
+    takenFull += blendArea(
+      octx,
+      job.original,
+      answer,
+      W,
+      H,
+      cx0,
+      cy0,
+      cropW,
+      cropH,
+      region,
+      cw,
+      ch,
+      seam.offset,
+      fit,
+      featherFull,
+    )
+
+    // Overlay for the UI: the area taken from the model, at work resolution
+    // (a see-through tint, ready to lay over the picture)
+    const nc = cw * ch
+    const regionCanvas = new OffscreenCanvas(cw, ch)
+    const rimg = new ImageData(cw, ch)
+    for (let p = 0; p < nc; p++) {
+      rimg.data[p * 4] = OVERLAY_TINT[0]
+      rimg.data[p * 4 + 1] = OVERLAY_TINT[1]
+      rimg.data[p * 4 + 2] = OVERLAY_TINT[2]
+      rimg.data[p * 4 + 3] = region[p] ? OVERLAY_TINT[3] : 0
+    }
+    regionCanvas.getContext('2d')!.putImageData(rimg, 0, 0)
+    ovctx.drawImage(regionCanvas, cx0 * sx, cy0 * sy, cropW * sx, cropH * sy)
+  }
+
+  // Every area has been pasted: the answer is not read again, and the encoder
+  // below needs room of its own
+  discard(answer.canvas)
+  if (takenFull === 0) {
+    discard(out)
+    return { kind: 'reject', reason: 'no change near the arrows' }
+  }
+
+  // Always lossless: a JPEG would re-encode — and shift — every pixel the
+  // edit was meant to leave alone
+  const blob = await out.convertToBlob({ type: 'image/png' })
+  discard(out)
+  const mask = await overlay.convertToBlob({ type: 'image/png' })
+  return {
+    kind: 'ok',
+    blob,
+    mask,
+    info: {
+      arrowsChanged: found.arrowsChanged,
+      coverage: takenFull / (W * H),
+      reachedLimit: found.reachedLimit,
+      widespread: found.awayShare > WIDESPREAD,
+      ...(options.extents ? { extentsUsed: found.extentsUsed } : {}),
+    },
+  }
+}
+
+// The answer laid on the original: where, with which colour fit, and its
+// pixels extended past its own edges
+interface Placed {
+  place: Placement
+  fit: { a: Float32Array; b: Float32Array }
+  zoomCheck: number[]
+  answer: Answer
+}
+
+// 1. Where the answer sits on the original, and its colour drift — both
+// measured away from the arrows, where nothing should have changed. Null: the
+// answer has another shape than the picture.
+function placeAnswer(job: LocalEditJob, result: ImageBitmap): Placed | null {
+  const { W, H, w, h } = job
   const sx = w / W
   const sy = h / H
 
   const arO = W / H
   const arR = result.width / result.height
-  if (Math.abs(arR - arO) / arO > AR_TOLERANCE) return { kind: 'reject', reason: SHAPE_REJECT, final: true }
+  if (Math.abs(arR - arO) / arO > AR_TOLERANCE) return null
 
-  // 1. Where the answer sits on the original, and its colour drift — both
-  // measured away from the arrows, where nothing should have changed
   const shift = analyzeResult(job.analysis, result)
   let place: Placement = { dx: shift.dx, dy: shift.dy, sx: 1, sy: 1 }
   const unzoomed = colourFitAt(job, result, place)
@@ -321,10 +433,39 @@ export async function composeLocalEdit(
     (FLOW_MARGIN + 2) / Math.min(sx, sy) +
     (2 * LOCAL_ALIGN + 2) / cMin +
     8
-  const answer = extendAnswer(result, W, H, margin)
+  return { place, fit, zoomCheck, answer: extendAnswer(result, W, H, margin) }
+}
 
-  // 2. Where did it change?
-  //
+// The changed areas to paste, at work size: all that the steps after the
+// detection read of it
+interface ChangedAreas {
+  grown: Uint8Array
+  // Area number per pixel (1…clusters; 0: none), with room for seam and blend
+  labels: Int32Array
+  clusters: number
+  // Per area, where the search for its exact placement starts
+  starts: Placement[]
+  keepOut?: Uint8Array | null
+  forbidden?: Uint8Array | null
+  arrowsChanged: boolean[]
+  reachedLimit: boolean
+  awayShare: number
+  extentsUsed?: boolean[]
+}
+
+// 2. Where did it change?
+async function findAreas(
+  job: LocalEditJob,
+  { answer, place, fit, zoomCheck }: Placed,
+  options: LocalEditOptions,
+  featherFull: number,
+  roomFull: number,
+): Promise<ChangedAreas | { reject: string }> {
+  const { W, H, w, h } = job
+  const n = w * h
+  const sx = w / W
+  const sy = h / H
+
   // Compare every pixel at its own alignment: a dense displacement field
   // follows the slight warp of a repaint, so redrawn edges don't pass for
   // changes.
@@ -356,168 +497,146 @@ export async function composeLocalEdit(
     zoomCheck,
   }
   if (looksUnrelated(diff, job.origGrad, gradientMagnitude(aligned.planes[0], w, h), valid, job.zones, n))
-    return { kind: 'reject', reason: 'the model drew a different picture' }
+    return { reject: 'the model drew a different picture' }
 
   const hints = await readHints(job, options)
   const found = detectChange(job, diff, valid, globalModel, flow, aligned.planes, hints)
   lastStats = found.stats
   lastDebug = { ...lastDebug, grown: found.grown.slice(), widespread: found.awayShare, maps: found.maps }
-  if (!found.arrowsChanged.some(Boolean) && !hints.taken)
-    return { kind: 'reject', reason: 'no change near the arrows' }
+  if (!found.arrowsChanged.some(Boolean) && !hints.taken) return { reject: 'no change near the arrows' }
   const { grown } = found
 
-  // 3. Seam per changed area, at a finer crop resolution
-  const featherFull = Math.max(2, FEATHER * Math.min(W, H))
-  const roomFull = Math.max(6, SEAM_ROOM * Math.min(W, H))
+  // One area per connected part of the change, with room for seam and blend
   const mayWork = dilate(grown, w, h, (featherFull + roomFull) * Math.min(sx, sy))
   const { labels, count: clusters } = labelComponents(mayWork, w, h)
   const starts = clusterPlacements(labels, clusters, grown, aligned.valid, flow, place, w, h, sx, sy)
-
-  const out = new OffscreenCanvas(W, H)
-  const octx = out.getContext('2d', { willReadFrequently: true })!
-  octx.drawImage(job.original, 0, 0)
-  const overlay = new OffscreenCanvas(w, h)
-  const ovctx = overlay.getContext('2d')!
-  let takenFull = 0
-
-  for (let k = 1; k <= clusters; k++) {
-    // Crop box (original px) around this area, with room for the blend fit
-    let bx0 = w
-    let by0 = h
-    let bx1 = -1
-    let by1 = -1
-    for (let p = 0; p < n; p++) {
-      if (labels[p] !== k) continue
-      const x = p % w
-      const y = (p - x) / w
-      if (x < bx0) bx0 = x
-      if (x > bx1) bx1 = x
-      if (y < by0) by0 = y
-      if (y > by1) by1 = y
-    }
-    const pad = roomFull
-    const cx0 = Math.max(0, Math.floor(bx0 / sx - pad))
-    const cy0 = Math.max(0, Math.floor(by0 / sy - pad))
-    const cx1 = Math.min(W, Math.ceil((bx1 + 1) / sx + pad))
-    const cy1 = Math.min(H, Math.ceil((by1 + 1) / sy + pad))
-    const cropW = cx1 - cx0
-    const cropH = cy1 - cy0
-    if (cropW < 4 || cropH < 4) continue
-
-    const c = Math.min(1, CROP_MAX / Math.max(cropW, cropH))
-    const cw = Math.max(4, Math.round(cropW * c))
-    const ch = Math.max(4, Math.round(cropH * c))
-    const rx = cw / cropW
-    const ry = ch / cropH
-
-    // This area's share of the detected change, at crop resolution
-    const grownK = new Uint8Array(n)
-    for (let p = 0; p < n; p++) grownK[p] = grown[p] && labels[p] === k ? 1 : 0
-    const changeC = resampleMask(grownK, w, h, cx0 * sx, cy0 * sy, cropW * sx, cropH * sy, cw, ch)
-
-    const origC = readRgb(job.original, cw, ch, placeRect(IDENTITY, W, H, cx0, cy0, rx, ry))
-    const offset = refineOffset(
-      origC.rgb,
-      answer,
-      W,
-      H,
-      cw,
-      ch,
-      cx0,
-      cy0,
-      rx,
-      ry,
-      starts[k],
-      changeC,
-      featherFull * c,
-      roomFull * c,
-    )
-    const resC = readAnswer(answer, cw, ch, placeRect(offset, W, H, cx0, cy0, rx, ry), false)
-
-    // Seam cost: how different the two pictures are, after the colour fit
-    const nc = cw * ch
-    const origLabC = toOklab(origC.rgb, nc).map((ch0) => gaussianBlur(ch0, cw, ch, SEAM_BLUR))
-    const resLabC = toOklab(applyFit(resC.rgb, fit, nc), nc).map((ch0) => gaussianBlur(ch0, cw, ch, SEAM_BLUR))
-    const d = labDistance(origLabC, resLabC, nc)
-    const cost = new Float32Array(nc)
-    for (let p = 0; p < nc; p++) {
-      const v = Math.min(d[p], 60)
-      cost[p] = v + (v * v) / 16
-    }
-    const must = dilate(changeC, cw, ch, featherFull * c)
-    const may = dilate(changeC, cw, ch, (featherFull + roomFull) * c)
-    // What the change only surrounds (eyes inside removed glasses, a face
-    // inside a recoloured hood) is not part of it: beyond the blend band
-    // around the change, those pockets keep the original
-    const pockets = enclosedHoles(changeC, cw, ch)
-    if (found.keepOut) {
-      const outC = resampleMask(found.keepOut, w, h, cx0 * sx, cy0 * sy, cropW * sx, cropH * sy, cw, ch)
-      for (let p = 0; p < nc; p++) if (outC[p]) pockets[p] = 1
-    }
-    // … and in guarded areas and where the user put the original back,
-    // nothing is taken at all
-    const backC = found.forbidden
-      ? resampleMask(found.forbidden, w, h, cx0 * sx, cy0 * sy, cropW * sx, cropH * sy, cw, ch)
-      : null
-    for (let p = 0; p < nc; p++) {
-      if (!resC.valid[p] || !origC.valid[p] || (backC && backC[p])) {
-        may[p] = 0
-        must[p] = 0
-      } else if (pockets[p] && !must[p]) may[p] = 0
-    }
-    const region = optimalSeamRegion(must, may, cost, cw, ch)
-
-    // 4. Blend at full resolution
-    takenFull += blendArea(
-      octx,
-      job.original,
-      answer,
-      W,
-      H,
-      cx0,
-      cy0,
-      cropW,
-      cropH,
-      region,
-      cw,
-      ch,
-      offset,
-      fit,
-      featherFull,
-    )
-
-    // Overlay for the UI: the area taken from the model, at work resolution
-    // (a see-through tint, ready to lay over the picture)
-    const regionCanvas = new OffscreenCanvas(cw, ch)
-    const rimg = new ImageData(cw, ch)
-    for (let p = 0; p < nc; p++) {
-      rimg.data[p * 4] = OVERLAY_TINT[0]
-      rimg.data[p * 4 + 1] = OVERLAY_TINT[1]
-      rimg.data[p * 4 + 2] = OVERLAY_TINT[2]
-      rimg.data[p * 4 + 3] = region[p] ? OVERLAY_TINT[3] : 0
-    }
-    regionCanvas.getContext('2d')!.putImageData(rimg, 0, 0)
-    ovctx.drawImage(regionCanvas, cx0 * sx, cy0 * sy, cropW * sx, cropH * sy)
-  }
-
-  if (takenFull === 0) return { kind: 'reject', reason: 'no change near the arrows' }
-
-  // Always lossless: a JPEG would re-encode — and shift — every pixel the
-  // edit was meant to leave alone
-  const blob = await out.convertToBlob({ type: 'image/png' })
-  const mask = await overlay.convertToBlob({ type: 'image/png' })
   return {
-    kind: 'ok',
-    blob,
-    mask,
-    info: {
-      arrowsChanged: found.arrowsChanged,
-      coverage: takenFull / (W * H),
-      reachedLimit: found.reachedLimit,
-      widespread: found.awayShare > WIDESPREAD,
-      ...(options.extents ? { extentsUsed: found.extentsUsed } : {}),
-    },
+    grown,
+    labels,
+    clusters,
+    starts,
+    keepOut: found.keepOut,
+    forbidden: found.forbidden,
+    arrowsChanged: found.arrowsChanged,
+    reachedLimit: found.reachedLimit,
+    awayShare: found.awayShare,
+    extentsUsed: found.extentsUsed,
   }
+}
+
+// 3. Where area `k` is cut out: its crop box (original px), the region to
+// take inside it (at crop resolution, cw×ch) and the answer's exact placement
+// there. Null: too small an area to work on.
+function seamAround(
+  job: LocalEditJob,
+  answer: Answer,
+  found: ChangedAreas,
+  k: number,
+  fit: { a: Float32Array; b: Float32Array },
+  featherFull: number,
+  roomFull: number,
+): {
+  cx0: number
+  cy0: number
+  cropW: number
+  cropH: number
+  cw: number
+  ch: number
+  region: Uint8Array
+  offset: Placement
+} | null {
+  const { W, H, w, h } = job
+  const n = w * h
+  const sx = w / W
+  const sy = h / H
+  const { grown, labels, starts } = found
+
+  // Crop box (original px) around this area, with room for the blend fit
+  let bx0 = w
+  let by0 = h
+  let bx1 = -1
+  let by1 = -1
+  for (let p = 0; p < n; p++) {
+    if (labels[p] !== k) continue
+    const x = p % w
+    const y = (p - x) / w
+    if (x < bx0) bx0 = x
+    if (x > bx1) bx1 = x
+    if (y < by0) by0 = y
+    if (y > by1) by1 = y
+  }
+  const pad = roomFull
+  const cx0 = Math.max(0, Math.floor(bx0 / sx - pad))
+  const cy0 = Math.max(0, Math.floor(by0 / sy - pad))
+  const cx1 = Math.min(W, Math.ceil((bx1 + 1) / sx + pad))
+  const cy1 = Math.min(H, Math.ceil((by1 + 1) / sy + pad))
+  const cropW = cx1 - cx0
+  const cropH = cy1 - cy0
+  if (cropW < 4 || cropH < 4) return null
+
+  const c = Math.min(1, CROP_MAX / Math.max(cropW, cropH))
+  const cw = Math.max(4, Math.round(cropW * c))
+  const ch = Math.max(4, Math.round(cropH * c))
+  const rx = cw / cropW
+  const ry = ch / cropH
+
+  // This area's share of the detected change, at crop resolution
+  const grownK = new Uint8Array(n)
+  for (let p = 0; p < n; p++) grownK[p] = grown[p] && labels[p] === k ? 1 : 0
+  const changeC = resampleMask(grownK, w, h, cx0 * sx, cy0 * sy, cropW * sx, cropH * sy, cw, ch)
+
+  const origC = readRgb(job.original, cw, ch, placeRect(IDENTITY, W, H, cx0, cy0, rx, ry))
+  const offset = refineOffset(
+    origC.rgb,
+    answer,
+    W,
+    H,
+    cw,
+    ch,
+    cx0,
+    cy0,
+    rx,
+    ry,
+    starts[k],
+    changeC,
+    featherFull * c,
+    roomFull * c,
+  )
+  const resC = readAnswer(answer, cw, ch, placeRect(offset, W, H, cx0, cy0, rx, ry), false)
+
+  // Seam cost: how different the two pictures are, after the colour fit
+  const nc = cw * ch
+  const origLabC = toOklab(origC.rgb, nc).map((ch0) => gaussianBlur(ch0, cw, ch, SEAM_BLUR))
+  const resLabC = toOklab(applyFit(resC.rgb, fit, nc), nc).map((ch0) => gaussianBlur(ch0, cw, ch, SEAM_BLUR))
+  const d = labDistance(origLabC, resLabC, nc)
+  const cost = new Float32Array(nc)
+  for (let p = 0; p < nc; p++) {
+    const v = Math.min(d[p], 60)
+    cost[p] = v + (v * v) / 16
+  }
+  const must = dilate(changeC, cw, ch, featherFull * c)
+  const may = dilate(changeC, cw, ch, (featherFull + roomFull) * c)
+  // What the change only surrounds (eyes inside removed glasses, a face
+  // inside a recoloured hood) is not part of it: beyond the blend band
+  // around the change, those pockets keep the original
+  const pockets = enclosedHoles(changeC, cw, ch)
+  if (found.keepOut) {
+    const outC = resampleMask(found.keepOut, w, h, cx0 * sx, cy0 * sy, cropW * sx, cropH * sy, cw, ch)
+    for (let p = 0; p < nc; p++) if (outC[p]) pockets[p] = 1
+  }
+  // … and in guarded areas and where the user put the original back,
+  // nothing is taken at all
+  const backC = found.forbidden
+    ? resampleMask(found.forbidden, w, h, cx0 * sx, cy0 * sy, cropW * sx, cropH * sy, cw, ch)
+    : null
+  for (let p = 0; p < nc; p++) {
+    if (!resC.valid[p] || !origC.valid[p] || (backC && backC[p])) {
+      may[p] = 0
+      must[p] = 0
+    } else if (pockets[p] && !must[p]) may[p] = 0
+  }
+  const region = optimalSeamRegion(must, may, cost, cw, ch)
+  return { cx0, cy0, cropW, cropH, cw, ch, region, offset }
 }
 
 // ---------------------------------------------------------------------------
@@ -1729,7 +1848,12 @@ function refineOffset(
   return { ...start, dx: start.dx - best.sx / rx, dy: start.dy - best.sy / ry }
 }
 
-// Pastes one area at full resolution; returns how many pixels were taken
+// Pastes one area at full resolution; returns how many pixels were taken.
+//
+// The crop can be the whole picture, so what is held at once matters here:
+// every buffer is made as late, and let go as early, as the arithmetic allows
+// (at the final loop: the region, alpha and the two pictures, 13 bytes per
+// crop pixel).
 function blendArea(
   octx: OffscreenCanvasRenderingContext2D,
   original: ImageBitmap,
@@ -1747,25 +1871,20 @@ function blendArea(
   fit: { a: Float32Array; b: Float32Array },
   feather: number,
 ): number {
-  const n = cw * ch
   // Region at full resolution (smooth upscale, then re-binarised)
   const region = resampleMask(regionC, rw, rh, 0, 0, rw, rh, cw, ch)
 
-  // Alpha: 0 exactly at the seam, 1 once `feather` px inside
-  const outside = new Uint8Array(n)
-  for (let p = 0; p < n; p++) outside[p] = region[p] ? 0 : 1
-  const depth = distanceToSet(outside, cw, ch)
-  const alpha = new Float32Array(n)
-  let taken = 0
-  for (let p = 0; p < n; p++) {
-    if (!region[p]) continue
-    const t = Math.min(1, depth[p] / feather)
-    alpha[p] = t * t * (3 - 2 * t)
-    if (alpha[p] > 0) taken++
-  }
+  // Local tone match + boundary correction are estimated on a small copy
+  // (below). Its mask is made first: shrinking the region takes a crop-sized
+  // canvas for a moment, which is cheapest while nothing else is held.
+  const bs = Math.min(1, BLEND_MAX / Math.max(cw, ch))
+  const bw = Math.max(4, Math.round(cw * bs))
+  const bh = Math.max(4, Math.round(ch * bs))
+  const maskSmall = resampleMask(region, cw, ch, 0, 0, cw, ch, bw, bh)
+
+  const { alpha, taken } = featherAlpha(region, cw, ch, feather)
   if (taken === 0) return 0
 
-  const base = octx.getImageData(x0, y0, cw, ch)
   const layerCanvas = new OffscreenCanvas(cw, ch)
   const lctx = layerCanvas.getContext('2d', { willReadFrequently: true })!
   const rect = placeRect(offset, W, H, x0, y0, 1, 1)
@@ -1781,21 +1900,21 @@ function blendArea(
     drawAnswer(lctx, answer, rect)
     layer = lctx.getImageData(0, 0, cw, ch)
   }
-
-  // Local tone match + boundary correction, estimated on a small copy. The
-  // crop's own frame can only be the picture's edge (the crop leaves room
-  // everywhere else), which isn't a seam: the correction stays free there.
-  const bs = Math.min(1, BLEND_MAX / Math.max(cw, ch))
-  const bw = Math.max(4, Math.round(cw * bs))
-  const bh = Math.max(4, Math.round(ch * bs))
-  const origSmall = smallCopy(original, x0, y0, cw, ch, bw, bh)
+  // The canvas was only needed for the small copy: its pixels are in `layer`
   const layerSmall = smallCopyOf(layerCanvas, bw, bh)
-  const maskSmall = resampleMask(region, cw, ch, 0, 0, cw, ch, bw, bh)
+  discard(layerCanvas)
+
+  // The crop's own frame can only be the picture's edge (the crop leaves room
+  // everywhere else), which isn't a seam: the correction stays free there.
+  const origSmall = smallCopy(original, x0, y0, cw, ch, bw, bh)
   const corr = computeCorrection(origSmall, layerSmall, maskSmall, bw, bh, true)
-  const field = corr.field.map((f) => upsample(f, bw, bh, cw, ch))
   // Fall back to the global colour fit when the crop has too little outside
   const a = corr.a[0] === 1 && corr.a[1] === 1 && corr.a[2] === 1 && corr.b[0] === 0 ? fit.a : corr.a
   const b = a === fit.a ? fit.b : corr.b
+
+  // Nothing has been drawn on the picture since this area's turn began, so
+  // reading it only now gives the same pixels as reading it first would
+  const base = octx.getImageData(x0, y0, cw, ch)
 
   // Grain: add noise where the answer is smoother than the original around it
   const sigmaOrig = sampleSigma(base.data, region, cw, ch, false)
@@ -1810,22 +1929,60 @@ function blendArea(
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296
   }
 
+  // The correction field is spread to full size one row at a time, and only
+  // for rows that take something from the answer
+  const fieldRow = [new Float32Array(cw), new Float32Array(cw), new Float32Array(cw)]
   const bd = base.data
   const ld = layer.data
-  for (let p = 0; p < n; p++) {
-    const al = alpha[p]
-    // Transparent parts of the original stay as they are
-    if (al <= 0 || bd[p * 4 + 3] < 250 || ld[p * 4 + 3] < 250) continue
-    const noise = addSigma > 0.5 ? (rand() + rand() + rand() - 1.5) * (addSigma / 0.5) : 0
-    const j = p * 4
-    for (let k = 0; k < 3; k++) {
-      let v = a[k] * ld[j + k] + b[k] + field[k][p] + noise
-      v = v < 0 ? 0 : v > 255 ? 255 : v
-      bd[j + k] = Math.round(bd[j + k] + (v - bd[j + k]) * al)
+  for (let y = 0; y < ch; y++) {
+    let spread = false
+    for (let x = 0; x < cw; x++) {
+      const p = y * cw + x
+      const al = alpha[p]
+      // Transparent parts of the original stay as they are
+      if (al <= 0 || bd[p * 4 + 3] < 250 || ld[p * 4 + 3] < 250) continue
+      if (!spread) {
+        for (let k = 0; k < 3; k++) upsampleRow(corr.field[k], bw, bh, cw, ch, y, fieldRow[k])
+        spread = true
+      }
+      const noise = addSigma > 0.5 ? (rand() + rand() + rand() - 1.5) * (addSigma / 0.5) : 0
+      const j = p * 4
+      for (let k = 0; k < 3; k++) {
+        let v = a[k] * ld[j + k] + b[k] + fieldRow[k][x] + noise
+        v = v < 0 ? 0 : v > 255 ? 255 : v
+        bd[j + k] = Math.round(bd[j + k] + (v - bd[j + k]) * al)
+      }
     }
   }
   octx.putImageData(base, x0, y0)
   return taken
+}
+
+// Alpha for the blend: 0 outside the region and exactly at the seam, 1 once
+// `feather` px inside; and how many pixels get any of the answer. (Its own
+// function, so that the scratch mask is gone as soon as it returns.)
+function featherAlpha(
+  region: Uint8Array,
+  w: number,
+  h: number,
+  feather: number,
+): { alpha: Float32Array; taken: number } {
+  const n = w * h
+  const outside = new Uint8Array(n)
+  for (let p = 0; p < n; p++) outside[p] = region[p] ? 0 : 1
+  // Depth becomes alpha in place: one float per pixel instead of two
+  const alpha = distanceToSet(outside, w, h)
+  let taken = 0
+  for (let p = 0; p < n; p++) {
+    if (!region[p]) {
+      alpha[p] = 0
+      continue
+    }
+    const t = Math.min(1, alpha[p] / feather)
+    alpha[p] = t * t * (3 - 2 * t)
+    if (alpha[p] > 0) taken++
+  }
+  return { alpha, taken }
 }
 
 // ---------------------------------------------------------------------------
@@ -1980,6 +2137,7 @@ function readAnswer(
   ctx.imageSmoothingQuality = 'high'
   drawAnswer(ctx, answer, rect)
   const out = planes(ctx.getImageData(0, 0, w, h).data, w * h)
+  discard(canvas)
   if (real) {
     const colOk = new Uint8Array(w)
     const rowOk = new Uint8Array(h)
@@ -2003,7 +2161,16 @@ function readRgb(source: ImageBitmap, w: number, h: number, rect: Rect): { rgb: 
   const ctx = canvas.getContext('2d', { willReadFrequently: true })!
   ctx.imageSmoothingQuality = 'high'
   ctx.drawImage(source, 0, 0, source.width, source.height, rect.ox, rect.oy, rect.dw, rect.dh)
-  return planes(ctx.getImageData(0, 0, w, h).data, w * h)
+  const out = planes(ctx.getImageData(0, 0, w, h).data, w * h)
+  discard(canvas)
+  return out
+}
+
+// Gives a scratch canvas's pixel store back at once. Without this it lingers
+// until the garbage collector gets round to the canvas, and at full size
+// that is tens of MB each.
+function discard(canvas: OffscreenCanvas): void {
+  canvas.width = canvas.height = 0
 }
 
 function planes(data: Uint8ClampedArray, n: number): { rgb: Float32Array[]; valid: Uint8Array } {
@@ -2049,6 +2216,8 @@ function resampleMask(
   ctx.imageSmoothingQuality = 'high'
   ctx.drawImage(src, sx, sy, sw, sh, 0, 0, dw, dh)
   const data = ctx.getImageData(0, 0, dw, dh).data
+  discard(src)
+  discard(dst)
   const out = new Uint8Array(dw * dh)
   for (let p = 0; p < out.length; p++) out[p] = data[p * 4 + 3] >= 128 ? 1 : 0
   return out
@@ -2067,7 +2236,9 @@ function smallCopy(
   const ctx = canvas.getContext('2d', { willReadFrequently: true })!
   ctx.imageSmoothingQuality = 'high'
   ctx.drawImage(source, x0, y0, cw, ch, 0, 0, bw, bh)
-  return ctx.getImageData(0, 0, bw, bh).data
+  const data = ctx.getImageData(0, 0, bw, bh).data
+  discard(canvas)
+  return data
 }
 
 function smallCopyOf(source: OffscreenCanvas, bw: number, bh: number): Uint8ClampedArray {
@@ -2075,28 +2246,35 @@ function smallCopyOf(source: OffscreenCanvas, bw: number, bh: number): Uint8Clam
   const ctx = canvas.getContext('2d', { willReadFrequently: true })!
   ctx.imageSmoothingQuality = 'high'
   ctx.drawImage(source, 0, 0, bw, bh)
-  return ctx.getImageData(0, 0, bw, bh).data
+  const data = ctx.getImageData(0, 0, bw, bh).data
+  discard(canvas)
+  return data
 }
 
-// Bilinear upsample of a small float field
-function upsample(src: Float32Array, sw: number, sh: number, dw: number, dh: number): Float32Array {
-  const out = new Float32Array(dw * dh)
-  for (let y = 0; y < dh; y++) {
-    const fy = Math.min(sh - 1, Math.max(0, ((y + 0.5) * sh) / dh - 0.5))
-    const y0 = Math.floor(fy)
-    const y1 = Math.min(sh - 1, y0 + 1)
-    const ty = fy - y0
-    for (let x = 0; x < dw; x++) {
-      const fx = Math.min(sw - 1, Math.max(0, ((x + 0.5) * sw) / dw - 0.5))
-      const x0 = Math.floor(fx)
-      const x1 = Math.min(sw - 1, x0 + 1)
-      const tx = fx - x0
-      const top = src[y0 * sw + x0] * (1 - tx) + src[y0 * sw + x1] * tx
-      const bottom = src[y1 * sw + x0] * (1 - tx) + src[y1 * sw + x1] * tx
-      out[y * dw + x] = top * (1 - ty) + bottom * ty
-    }
+// Bilinear upsample of a small float field: row `y` of the dw×dh result, into
+// `out` (dw long)
+function upsampleRow(
+  src: Float32Array,
+  sw: number,
+  sh: number,
+  dw: number,
+  dh: number,
+  y: number,
+  out: Float32Array,
+): void {
+  const fy = Math.min(sh - 1, Math.max(0, ((y + 0.5) * sh) / dh - 0.5))
+  const y0 = Math.floor(fy)
+  const y1 = Math.min(sh - 1, y0 + 1)
+  const ty = fy - y0
+  for (let x = 0; x < dw; x++) {
+    const fx = Math.min(sw - 1, Math.max(0, ((x + 0.5) * sw) / dw - 0.5))
+    const x0 = Math.floor(fx)
+    const x1 = Math.min(sw - 1, x0 + 1)
+    const tx = fx - x0
+    const top = src[y0 * sw + x0] * (1 - tx) + src[y0 * sw + x1] * tx
+    const bottom = src[y1 * sw + x0] * (1 - tx) + src[y1 * sw + x1] * tx
+    out[x] = top * (1 - ty) + bottom * ty
   }
-  return out
 }
 
 // Robust noise estimate from neighbouring green pixels, inside or outside

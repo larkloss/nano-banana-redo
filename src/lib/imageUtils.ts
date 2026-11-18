@@ -1,8 +1,8 @@
-import JSZip from 'jszip'
 import type { GeneratedImage, OutputFormat, ParsedImagePart } from '../types'
 import { getModel } from './models'
 import { toFullColourJpeg } from './jpegExport'
 import { keepOnDisk } from './blobStore'
+import { zipStore } from './zipStore'
 
 // The browser's own decoder where it has one: the same bytes, without a loop
 // over tens of millions of characters holding the page up
@@ -365,11 +365,11 @@ export async function downloadImage(image: GeneratedImage, index: number): Promi
   downloadBlob(await exportBlob(image), makeFilename(image, index))
 }
 
+// The archive only points at the pictures' own bytes (see zipStore.ts): a
+// long session's worth of 4K pictures is never pulled into memory at once
 export async function downloadAllAsZip(images: GeneratedImage[]): Promise<void> {
-  const zip = new JSZip()
   const blobs = await Promise.all(images.map(exportBlob))
-  images.forEach((img, i) => zip.file(makeFilename(img, i), blobs[i]))
-  const blob = await zip.generateAsync({ type: 'blob' })
+  const blob = await zipStore(images.map((img, i) => ({ name: makeFilename(img, i), blob: blobs[i] })))
   downloadBlob(blob, `abigail-chase_${Date.now()}.zip`)
 }
 

@@ -2,8 +2,14 @@
 // 4K picture takes a second or two, which must not freeze the page
 import { encodeJpeg, readPixels } from './jpegEncode'
 
-self.onmessage = async (event: MessageEvent<{ id: number; picture: Blob; quality: number; maxSide?: number }>) => {
-  const { id, picture, quality, maxSide } = event.data
+interface Job {
+  id: number
+  picture: Blob
+  quality: number
+  maxSide?: number
+}
+
+async function encode({ id, picture, quality, maxSide }: Job): Promise<void> {
   try {
     const pixels = await readPixels(picture, maxSide)
     const bytes = encodeJpeg(pixels.data, pixels.width, pixels.height, quality)
@@ -11,4 +17,15 @@ self.onmessage = async (event: MessageEvent<{ id: number; picture: Blob; quality
   } catch (err) {
     self.postMessage({ id, error: err instanceof Error ? err.message : String(err) })
   }
+}
+
+// One picture at a time: "Download all" asks for every picture at once, and
+// each is tens of MB once decoded. The next one is decoded only after the one
+// before has handed over its bytes. (`encode` reports its own failures, so
+// the chain never breaks.)
+let queue: Promise<void> = Promise.resolve()
+
+self.onmessage = (event: MessageEvent<Job>) => {
+  const job = event.data
+  queue = queue.then(() => encode(job))
 }
