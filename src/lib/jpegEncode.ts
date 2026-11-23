@@ -328,7 +328,11 @@ export async function readPixels(picture: Blob, maxSide?: number): Promise<Image
     ctx.fillRect(0, 0, width, height)
     ctx.imageSmoothingQuality = 'high'
     ctx.drawImage(bitmap, 0, 0, width, height)
-    return ctx.getImageData(0, 0, width, height)
+    const pixels = ctx.getImageData(0, 0, width, height)
+    // The canvas has been read: give its pixel store back now, not whenever
+    // the garbage collector gets round to it
+    canvas.width = canvas.height = 0
+    return pixels
   } finally {
     bitmap.close()
   }

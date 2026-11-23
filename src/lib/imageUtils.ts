@@ -1,9 +1,21 @@
-import JSZip from 'jszip'
 import type { GeneratedImage, OutputFormat, ParsedImagePart } from '../types'
 import { getModel } from './models'
 import { toFullColourJpeg } from './jpegExport'
+import { keepOnDisk } from './blobStore'
+import { zipStore } from './zipStore'
+
+// The browser's own decoder where it has one: the same bytes, without a loop
+// over tens of millions of characters holding the page up
+const fromBase64 = (Uint8Array as unknown as { fromBase64?: (text: string) => Uint8Array<ArrayBuffer> }).fromBase64
 
 export function base64ToBlob(base64: string, mimeType: string): Blob {
+  if (fromBase64) {
+    try {
+      return new Blob([fromBase64(base64)], { type: mimeType })
+    } catch {
+      // (stricter than atob about odd input: fall through to it)
+    }
+  }
   const binary = atob(base64)
   const bytes = new Uint8Array(binary.length)
   for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
@@ -30,7 +42,7 @@ export async function processImagePart(
   format: OutputFormat,
   meta: { attempt: number; modelId: string },
 ): Promise<GeneratedImage> {
-  const raw = base64ToBlob(part.base64, part.mimeType)
+  const raw = part.blob ?? base64ToBlob(part.base64, part.mimeType)
   // Decide on the real bytes, not the label the API attached to them
   const actual = await sniffImageMimeType(raw, part.mimeType)
   const bitmap = await createImageBitmap(raw)
@@ -47,11 +59,13 @@ export async function processImagePart(
     // browser's download and preview treat it correctly
     blob = new Blob([raw], { type: actual })
   }
+  const [small, kept] = await Promise.all([smallCopies(bitmap), keepOnDisk(blob)])
   const image: GeneratedImage = {
     id: crypto.randomUUID(),
     kind: 'image',
-    blob,
-    objectUrl: URL.createObjectURL(blob),
+    blob: kept,
+    objectUrl: URL.createObjectURL(kept),
+    ...small,
     width: bitmap.width,
     height: bitmap.height,
     mimeType,
@@ -62,6 +76,64 @@ export async function processImagePart(
   }
   bitmap.close()
   return image
+}
+
+// The short side of the small copy that tiles and lists show: enough for an
+// 80 px tile on a 3x screen
+const THUMB_SHORT_SIDE = 256
+// (a very long, thin picture is not made huge to reach that)
+const THUMB_LONG_SIDE = 1024
+// The short side of the copy a gallery card shows: a card is a square of at
+// most some 400 px, so this fills it pixel for pixel on a 2x screen
+const CARD_SHORT_SIDE = 1024
+
+// The reduced copies a picture is shown from where it is shown small
+async function smallCopies(bitmap: ImageBitmap): Promise<Pick<GeneratedImage, 'thumbUrl' | 'cardUrl'>> {
+  const [thumbUrl, cardUrl] = await Promise.all([
+    thumbnailUrl(bitmap),
+    thumbnailUrl(bitmap, CARD_SHORT_SIDE, Infinity, 0.9),
+  ])
+  return { ...(thumbUrl ? { thumbUrl } : {}), ...(cardUrl ? { cardUrl } : {}) }
+}
+
+// A small copy of a picture for the places that show it tiny, so that a strip
+// of twenty versions does not have twenty full-size pictures decoded behind
+// it. A separate file of its own: the picture itself is not touched.
+// Resolves to nothing when the picture is small already or a copy can't be
+// made — the picture itself is shown then.
+export async function thumbnailUrl(
+  source: ImageBitmap | Blob,
+  shortSide = THUMB_SHORT_SIDE,
+  longSide = THUMB_LONG_SIDE,
+  quality = 0.85,
+): Promise<string | undefined> {
+  let opened: ImageBitmap | null = null
+  let small: ImageBitmap | null = null
+  try {
+    const bitmap = source instanceof Blob ? (opened = await createImageBitmap(source)) : source
+    const scale = Math.min(
+      shortSide / Math.min(bitmap.width, bitmap.height),
+      longSide / Math.max(bitmap.width, bitmap.height),
+    )
+    if (!(scale < 0.75)) return undefined
+    const width = Math.max(1, Math.round(bitmap.width * scale))
+    const height = Math.max(1, Math.round(bitmap.height * scale))
+    // Shrunk by the browser itself, off to the side: drawing a 4K picture
+    // onto a small canvas with good smoothing holds the page up for half a
+    // second
+    small = await createImageBitmap(bitmap, { resizeWidth: width, resizeHeight: height, resizeQuality: 'high' })
+    const canvas = new OffscreenCanvas(width, height)
+    canvas.getContext('2d')!.drawImage(small, 0, 0)
+    // (WebP keeps transparency; a browser that can't write it gives a PNG)
+    const blob = await canvas.convertToBlob({ type: 'image/webp', quality })
+    canvas.width = canvas.height = 0
+    return URL.createObjectURL(blob)
+  } catch {
+    return undefined
+  } finally {
+    opened?.close()
+    small?.close()
+  }
 }
 
 async function toPng(bitmap: ImageBitmap): Promise<Blob> {
@@ -162,11 +234,13 @@ export async function uploadToImage(file: File): Promise<{ image: GeneratedImage
         blob = await canvas.convertToBlob({ type: 'image/png' })
       }
     }
+    const [small, kept] = await Promise.all([smallCopies(bitmap), keepOnDisk(blob)])
     const image: GeneratedImage = {
       id: crypto.randomUUID(),
       kind: 'image',
-      blob,
-      objectUrl: URL.createObjectURL(blob),
+      blob: kept,
+      objectUrl: URL.createObjectURL(kept),
+      ...small,
       width,
       height,
       mimeType: blob.type,
@@ -287,12 +361,20 @@ export function exportBlob(image: GeneratedImage): Promise<Blob> {
   }
   let pending = encoded.get(image.blob)
   if (!pending) {
-    pending = toFullColourJpeg(image.blob, SAVE_QUALITY)
+    // (kept on disk like the picture itself: after "Download all" there is
+    // one of these for every edit result)
+    pending = toFullColourJpeg(image.blob, SAVE_QUALITY).then(keepOnDisk)
     encoded.set(image.blob, pending)
     // a failed encode is not remembered
     pending.catch(() => encoded.delete(image.blob))
   }
   return pending
+}
+
+// The encoded copy made for saving a picture, if there is one (to free it
+// together with the picture)
+export function exportedCopy(blob: Blob): Promise<Blob> | undefined {
+  return encoded.get(blob)
 }
 
 // What the download will be, for labels
@@ -304,11 +386,11 @@ export async function downloadImage(image: GeneratedImage, index: number): Promi
   downloadBlob(await exportBlob(image), makeFilename(image, index))
 }
 
+// The archive only points at the pictures' own bytes (see zipStore.ts): a
+// long session's worth of 4K pictures is never pulled into memory at once
 export async function downloadAllAsZip(images: GeneratedImage[]): Promise<void> {
-  const zip = new JSZip()
   const blobs = await Promise.all(images.map(exportBlob))
-  images.forEach((img, i) => zip.file(makeFilename(img, i), blobs[i]))
-  const blob = await zip.generateAsync({ type: 'blob' })
+  const blob = await zipStore(images.map((img, i) => ({ name: makeFilename(img, i), blob: blobs[i] })))
   downloadBlob(blob, `abigail-chase_${Date.now()}.zip`)
 }
 

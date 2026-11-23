@@ -11,6 +11,8 @@ import { RunBar } from './components/run/RunBar'
 import { Gallery } from './components/gallery/Gallery'
 import { EditStudio } from './components/studio/EditStudio'
 import { useEditStudio } from './hooks/useEditStudio'
+import { heldByImage, letGo } from './lib/release'
+import { onPicturesLost, tidyPictureStore } from './lib/blobStore'
 import { applyTheme, loadTheme, type Theme } from './lib/theme'
 import { isMockMode } from './lib/mockGemini'
 import { getModel } from './lib/models'
@@ -147,6 +149,23 @@ function App() {
   }, [])
 
   // Warn before closing the tab mid-run (a generation or an edit)
+  useEffect(tidyPictureStore, [])
+  // The browser took the stored pictures away under the open page (its site
+  // data was cleared): say so, rather than leave broken pictures unexplained
+  const [picturesLost, setPicturesLost] = useState(false)
+  useEffect(() => {
+    onPicturesLost(() => setPicturesLost(true))
+    return () => onPicturesLost(null)
+  }, [])
+
+  // Clearing the gallery also frees the pictures: the bytes, the addresses
+  // they were shown from, and the edit chains nothing leads back to any more
+  const clearGallery = () => {
+    const { dropped, kept } = studio.forgetIdle()
+    letGo([...dropped, ...images.map(heldByImage)], kept)
+    clearImages()
+  }
+
   const anyRunning = isRunning || studio.isRunning
   useEffect(() => {
     if (!anyRunning) return
@@ -211,7 +230,7 @@ function App() {
         />
         <Gallery
           images={images}
-          onClear={clearImages}
+          onClear={clearGallery}
           onEdit={studio.open}
           onUpload={uploadPictures}
           pasteEnabled={!studio.openSession}
@@ -237,6 +256,25 @@ function App() {
           onStop={studio.stop}
           onClose={studio.close}
         />
+      )}
+      {picturesLost && (
+        <div
+          role="alert"
+          className="soft-shadow fixed left-1/2 top-4 z-[60] flex max-w-[min(92vw,640px)] -translate-x-1/2 items-start gap-3 rounded-2xl border border-red-500/50 bg-zinc-900 px-4 py-3 text-xs text-zinc-200"
+        >
+          <span>
+            <strong className="text-red-400">This site’s stored data was cleared in the browser.</strong> Pictures made
+            before that can no longer be opened or downloaded from this page — clear the gallery and make them again.
+            Pictures made from now on are safe until the tab is closed.
+          </span>
+          <button
+            type="button"
+            onClick={() => setPicturesLost(false)}
+            className="shrink-0 rounded-full border border-zinc-700 px-2.5 py-1 text-zinc-400 hover:bg-zinc-800"
+          >
+            OK
+          </button>
+        </div>
       )}
       {!studio.openSession && studio.isRunning && studio.runningTurn && (
         <button

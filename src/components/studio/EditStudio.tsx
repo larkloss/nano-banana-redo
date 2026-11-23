@@ -8,10 +8,12 @@ import { friendlyReason } from '../../lib/friendly'
 import { MAX_MARKS, markColor, summarizeEdit, type EditMark } from '../../lib/annotate'
 import { mentionedNumbers } from '../../lib/mentions'
 import type { Touch } from '../../lib/localEdit'
-import { DEFAULT_LOCATOR_MODEL, LOCATOR_MODELS } from '../../lib/locate'
+import { DEFAULT_LOCATOR_MODEL } from '../../lib/locate'
 import { loadApiKeys, loadStudioPrefs, saveStudioPrefs } from '../../lib/storage'
 import { isMockMode } from '../../lib/mockGemini'
 import { MarkedImage, type FoundBox } from './MarkedImage'
+import { PreviewImage } from '../common/PreviewImage'
+import { LocatorModelPicker } from './LocatorModelPicker'
 import { MarkList } from './MarkList'
 
 interface Props {
@@ -75,7 +77,6 @@ export function EditStudio({
   // Held-down views of the stage: the version it came from, the model's own
   // whole picture, or the area that was replaced
   const [peek, setPeek] = useState<null | 'before' | 'whole' | 'area'>(null)
-  const comparing = peek !== null
   // Edits with arrows keep everything away from them pixel-identical
   const [localOnly, setLocalOnly] = useState(true)
   // Arrows pointed at the picture, each with its own instruction. Positions
@@ -108,6 +109,19 @@ export function EditStudio({
   const previous = selectedTurn ? session.versions.find((v) => v.id === selectedTurn.sourceVersionId) : null
   const shown = peek === 'before' && previous ? previous : selected
   const shownUrl = peek === 'whole' && selected.local ? selected.local.whole.objectUrl : shown.image.objectUrl
+  // What is on the stage right now. A different picture (another version, a
+  // held "before") is decoded off to the side first and put on the stage when
+  // it is ready — put there undecoded, a 4K picture holds the whole page still
+  // for up to a second. Until then the picture before it stays, and so does
+  // everything that names or annotates it: the label, the tint, the boxes.
+  const stage = useOnStage(shownUrl, peek, selected.id)
+  const staged = session.versions.find((v) => v.id === stage.versionId) ?? selected
+  const stagedTurn = session.turns.find((t) => t.id === staged.turnId)
+  const stagedBefore = stagedTurn ? session.versions.find((v) => v.id === stagedTurn.sourceVersionId) : null
+  // (the picture on the stage is the selected version's own or one held from
+  // it: what belongs to the selected version can be drawn on it)
+  const caughtUp = staged.id === selected.id
+  const plain = stage.peek === null
   const hold = (view: 'before' | 'whole' | 'area') => ({
     onPointerDown: () => setPeek(view),
     onPointerUp: () => setPeek(null),
@@ -215,7 +229,9 @@ export function EditStudio({
 
   return (
     <div
-      className="fixed inset-0 z-40 flex items-stretch justify-center bg-black/50 p-3 backdrop-blur-sm md:p-6"
+      // (no blur of the page behind: it made every frame of typing and
+      // scrolling in here pay for redrawing the whole window)
+      className="fixed inset-0 z-40 flex items-stretch justify-center bg-black/75 p-3 md:p-6"
       // Closes only for a click that started on the backdrop — not a press on
       // the picture that happened to be released outside the dialog
       onPointerDownCapture={(e) => {
@@ -279,15 +295,20 @@ export function EditStudio({
           <section className="flex min-h-0 flex-col gap-3 p-4">
             <div className="relative flex min-h-[240px] flex-1 items-center justify-center overflow-hidden rounded-2xl bg-zinc-900">
               <MarkedImage
-                src={shownUrl}
-                alt={versionLabel(shown)}
+                src={stage.src}
+                alt={versionLabel(stage.peek === 'before' && stagedBefore ? stagedBefore : staged)}
                 marks={touching ? [] : marks}
                 activeId={activeMark}
-                interactive={!comparing}
-                overlayUrl={peek === 'area' || (touching && !comparing) ? selected.local?.areaUrl : null}
-                boxes={peek === 'area' || (touching && !comparing) ? foundBoxes : undefined}
+                interactive={plain}
+                overlayUrl={
+                  stage.peek === 'area' ? staged.local?.areaUrl : touching && caughtUp && plain ? selected.local?.areaUrl : null
+                }
+                boxes={caughtUp && (stage.peek === 'area' || (touching && plain)) ? foundBoxes : undefined}
                 touchUp={
-                  touching && selected.local && !comparing
+                  // (also in the moment before the stage has caught up with a
+                  // new result: a spot is a place in the picture, and the
+                  // version it belongs to is known)
+                  touching && selected.local && plain
                     ? {
                         applied: selected.local.options.touches ?? [],
                         pending: touching.picked,
@@ -307,7 +328,7 @@ export function EditStudio({
                 onMove={(id, x, y) => updateMark(id, { x, y })}
                 onActivate={setActiveMark}
               />
-              {!comparing && (
+              {plain && (
                 <span className="pointer-events-none absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full bg-black/60 px-3 py-1 text-[11px] text-white">
                   {touching
                     ? touching.take
@@ -321,18 +342,19 @@ export function EditStudio({
                 </span>
               )}
               <span className="absolute left-3 top-3 rounded-full bg-black/60 px-2.5 py-1 text-[11px] font-medium text-white">
-                {peek === 'before' && previous
-                  ? `Before · ${versionLabel(previous)}`
-                  : peek === 'whole'
+                {stage.peek === 'before' && stagedBefore
+                  ? `Before · ${versionLabel(stagedBefore)}`
+                  : stage.peek === 'whole'
                     ? 'The model’s whole picture'
-                    : peek === 'area'
+                    : stage.peek === 'area'
                       ? 'Replaced area'
-                      : touching
+                      : touching && caughtUp
                         ? `Touching up ${versionLabel(selected)}`
-                        : versionLabel(selected)}
+                        : versionLabel(staged)}
               </span>
               {busyHere && (
-                <span className="absolute right-3 top-3 flex items-center gap-1.5 rounded-full bg-black/60 px-2.5 py-1 text-[11px] text-white">
+                // (under the zoom buttons, which have the corner)
+                <span className="absolute right-3 top-14 flex items-center gap-1.5 rounded-full bg-black/60 px-2.5 py-1 text-[11px] text-white">
                   <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-blue-400" /> editing…
                 </span>
               )}
@@ -491,7 +513,12 @@ export function EditStudio({
                     v.id === selected.id ? 'border-blue-500' : 'border-transparent opacity-80 hover:opacity-100'
                   }`}
                 >
-                  <img src={v.image.objectUrl} alt={versionLabel(v)} className="h-16 w-16 object-cover" />
+                  <PreviewImage
+                    full={v.image.objectUrl}
+                    small={v.image.thumbUrl}
+                    alt={versionLabel(v)}
+                    className="h-16 w-16 object-cover"
+                  />
                   <span className="absolute inset-x-0 bottom-0 bg-black/55 py-0.5 text-center text-[10px] font-medium text-white">
                     {v.number === 0 ? 'Original' : `v${v.number}`}
                   </span>
@@ -643,24 +670,10 @@ export function EditStudio({
                     </label>
                   )}
                   {marks.length > 0 && localOnly && prefs.findObject && hasGoogleKey && (
-                    <>
-                      <input
-                        type="text"
-                        list="studio-locator-models"
-                        value={prefs.locatorModel}
-                        onChange={(e) => updatePrefs({ locatorModel: e.target.value.trim() })}
-                        placeholder={DEFAULT_LOCATOR_MODEL}
-                        spellCheck={false}
-                        aria-label="Gemini model that finds the object"
-                        title={`The Gemini model that looks at the picture — any one that understands images (${LOCATOR_MODELS.join(', ')}, …). Empty: ${DEFAULT_LOCATOR_MODEL}.`}
-                        className="w-36 rounded-full border border-zinc-700 bg-zinc-950 px-2.5 py-1 text-[11px] text-zinc-300 placeholder-zinc-600 outline-none focus:border-blue-500"
-                      />
-                      <datalist id="studio-locator-models">
-                        {LOCATOR_MODELS.map((id) => (
-                          <option key={id} value={id} />
-                        ))}
-                      </datalist>
-                    </>
+                    <LocatorModelPicker
+                      value={prefs.locatorModel}
+                      onChange={(locatorModel) => updatePrefs({ locatorModel })}
+                    />
                   )}
                   <label
                     className={`flex items-center gap-1.5 text-[11px] ${referenceCount > 0 ? 'text-zinc-400' : 'text-zinc-600'}`}
@@ -772,8 +785,9 @@ function TurnView({
       <div className="flex justify-end">
         <div className="max-w-[90%] rounded-2xl rounded-br-md bg-blue-600 px-3.5 py-2 text-sm text-white">
           {turn.guideUrl && (
-            <img
-              src={turn.guideUrl}
+            <PreviewImage
+              full={turn.guideUrl}
+              small={turn.guideSmallUrl}
               alt="Where each change goes"
               className="mb-2 max-h-40 rounded-xl border border-white/20"
             />
@@ -853,7 +867,12 @@ function TurnView({
                   session.selectedVersionId === v.id ? 'border-blue-500' : 'border-transparent hover:border-zinc-600'
                 }`}
               >
-                <img src={v.image.objectUrl} alt={versionLabel(v)} className="h-20 w-20 object-cover" />
+                <PreviewImage
+                  full={v.image.objectUrl}
+                  small={v.image.thumbUrl}
+                  alt={versionLabel(v)}
+                  className="h-20 w-20 object-cover"
+                />
                 <span className="absolute inset-x-0 bottom-0 bg-black/55 py-0.5 text-center text-[10px] text-white">
                   v{v.number}
                 </span>
@@ -1008,4 +1027,30 @@ function versionLabel(v: EditVersion): string {
 function editPrompt(session: EditSession, v: EditVersion): string {
   const turn = session.turns.find((t) => t.id === v.turnId)
   return turn ? summarizeEdit(turn.prompt, turn.marks) : ''
+}
+
+type Peek = null | 'before' | 'whole' | 'area'
+
+// The picture the stage shows: the one asked for once the browser has it
+// decoded, the one before it until then (see where it is used). The same
+// picture under another view — the tint over it, say — needs no wait.
+function useOnStage(src: string, peek: Peek, versionId: string): { src: string; peek: Peek; versionId: string } {
+  const [shown, setShown] = useState({ src, peek, versionId })
+  useEffect(() => {
+    let live = true
+    const swap = () => {
+      if (!live) return
+      setShown((was) =>
+        was.src === src && was.peek === peek && was.versionId === versionId ? was : { src, peek, versionId },
+      )
+    }
+    const next = new Image()
+    next.src = src
+    if (typeof next.decode === 'function') next.decode().then(swap, swap)
+    else swap()
+    return () => {
+      live = false
+    }
+  }, [src, peek, versionId])
+  return shown.src === src ? { src, peek, versionId } : shown
 }

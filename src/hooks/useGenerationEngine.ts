@@ -23,8 +23,8 @@ export function useGenerationEngine() {
     setImages((prev) => prev.filter((img) => img.id !== id))
   }, [])
 
-  // Object URLs are not revoked here: the edit studio may still be showing
-  // these images as versions. They are released when the tab closes.
+  // (the pictures themselves are freed by the caller, which knows what the
+  // edit studio still shows: see App's clearGallery)
   const clearImages = useCallback(() => {
     setImages([])
     reset()

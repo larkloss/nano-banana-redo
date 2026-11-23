@@ -76,7 +76,9 @@ async function ask(
   const prompt = locatePrompt(marks)
   // Gemini 4 Carbon thinks at "medium" unless told otherwise, and bills every
   // thinking token; finding a box is what its guide calls a "low" job. Other
-  // models are left at their defaults (not all take a thinking level).
+  // models are left at their defaults (not all take a thinking level): for
+  // Gemini 4 Hydrogen that is "high", of low / medium / high / xhigh (Google's
+  // thinking guide, November 2026).
   const quick = /carbon/i.test(modelId)
   let text: string
   try {

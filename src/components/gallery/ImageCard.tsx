@@ -1,4 +1,5 @@
 import type { GeneratedImage } from '../../types'
+import { PreviewImage } from '../common/PreviewImage'
 import { getModel } from '../../lib/models'
 import { downloadImage, saveFormat, sourceLabel } from '../../lib/imageUtils'
 
@@ -28,8 +29,9 @@ export function ImageCard({ image, index, onOpen, onEdit }: Props) {
           />
         ) : (
           <button type="button" onClick={onOpen} className="block w-full cursor-zoom-in overflow-hidden">
-            <img
-              src={image.objectUrl}
+            <PreviewImage
+              full={image.objectUrl}
+              small={image.cardUrl}
               alt={image.uploaded ? `Uploaded ${index + 1}` : `Generated ${index + 1}`}
               loading="lazy"
               className="aspect-square w-full object-cover transition-transform duration-300 group-hover:scale-[1.03]"
