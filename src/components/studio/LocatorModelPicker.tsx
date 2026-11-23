@@ -19,8 +19,8 @@ export function LocatorModelPicker({ value, onChange }: Props) {
   const [typing, setTyping] = useState(!listed)
   const title =
     'The Gemini model that looks at the picture and says where things are — any one that understands images. ' +
-    'gemini-4-carbon is asked to think at “low” (finding a box is a light job, and its thinking is billed); ' +
-    'other models think at their own default.'
+    'gemini-4-carbon is asked to think at “low” (finding a box is a light job, and thinking is billed as output); ' +
+    'other models think at their own default, which for gemini-4-hydrogen is “high”.'
   const look =
     'rounded-full border border-zinc-700 bg-zinc-950 py-1 text-[11px] text-zinc-300 outline-none focus:border-blue-500'
 
