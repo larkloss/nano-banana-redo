@@ -8,11 +8,12 @@ import { friendlyReason } from '../../lib/friendly'
 import { MAX_MARKS, markColor, summarizeEdit, type EditMark } from '../../lib/annotate'
 import { mentionedNumbers } from '../../lib/mentions'
 import type { Touch } from '../../lib/localEdit'
-import { DEFAULT_LOCATOR_MODEL, LOCATOR_MODELS } from '../../lib/locate'
+import { DEFAULT_LOCATOR_MODEL } from '../../lib/locate'
 import { loadApiKeys, loadStudioPrefs, saveStudioPrefs } from '../../lib/storage'
 import { isMockMode } from '../../lib/mockGemini'
 import { MarkedImage, type FoundBox } from './MarkedImage'
 import { PreviewImage } from '../common/PreviewImage'
+import { LocatorModelPicker } from './LocatorModelPicker'
 import { MarkList } from './MarkList'
 
 interface Props {
@@ -669,24 +670,10 @@ export function EditStudio({
                     </label>
                   )}
                   {marks.length > 0 && localOnly && prefs.findObject && hasGoogleKey && (
-                    <>
-                      <input
-                        type="text"
-                        list="studio-locator-models"
-                        value={prefs.locatorModel}
-                        onChange={(e) => updatePrefs({ locatorModel: e.target.value.trim() })}
-                        placeholder={DEFAULT_LOCATOR_MODEL}
-                        spellCheck={false}
-                        aria-label="Gemini model that finds the object"
-                        title={`The Gemini model that looks at the picture — any one that understands images (${LOCATOR_MODELS.join(', ')}, …). Empty: ${DEFAULT_LOCATOR_MODEL}.`}
-                        className="w-36 rounded-full border border-zinc-700 bg-zinc-950 px-2.5 py-1 text-[11px] text-zinc-300 placeholder-zinc-600 outline-none focus:border-blue-500"
-                      />
-                      <datalist id="studio-locator-models">
-                        {LOCATOR_MODELS.map((id) => (
-                          <option key={id} value={id} />
-                        ))}
-                      </datalist>
-                    </>
+                    <LocatorModelPicker
+                      value={prefs.locatorModel}
+                      onChange={(locatorModel) => updatePrefs({ locatorModel })}
+                    />
                   )}
                   <label
                     className={`flex items-center gap-1.5 text-[11px] ${referenceCount > 0 ? 'text-zinc-400' : 'text-zinc-600'}`}

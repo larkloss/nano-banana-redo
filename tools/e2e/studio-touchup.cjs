@@ -187,7 +187,21 @@ async function disturbed(p, before, after, discs) {
     const box = p.locator('[role=dialog] label:has-text("find the object") input')
     check('"find the object" is off to begin with', !(await box.isChecked()))
     await box.check()
-    check('model field shows the default', (await p.locator('[role=dialog] input[aria-label="Gemini model that finds the object"]').getAttribute('placeholder')) === 'gemini-4-hydrogen')
+    // The model is picked from a menu that always offers every model (as a
+    // text field with suggestions it only offered what matched the text in
+    // it: after picking one model the others could not be reached)
+    const menu = p.locator('[role=dialog] select[aria-label="Gemini model that finds the object"]')
+    const offered = () => menu.locator('option').allTextContents()
+    check('the model menu shows the default and offers every model', (await menu.inputValue()) === 'gemini-4-hydrogen' && (await offered()).join('|') === 'gemini-4-hydrogen (default)|gemini-4-carbon|Other model…', (await offered()).join('|'))
+    await menu.selectOption('gemini-4-carbon')
+    check('with another model picked, the menu still offers them all', (await menu.inputValue()) === 'gemini-4-carbon' && (await offered()).join('|') === 'gemini-4-hydrogen (default)|gemini-4-carbon|Other model…', (await offered()).join('|'))
+    await menu.selectOption({ label: 'Other model…' })
+    const typed = p.locator('[role=dialog] input[aria-label="Gemini model that finds the object (typed)"]')
+    await typed.fill('my-own-model')
+    await p.click('[role=dialog] button[aria-label="Back to the list of models"]')
+    check('a model ID can be typed, and stays on offer next to the others', (await menu.inputValue()) === 'my-own-model' && (await offered()).join('|') === 'gemini-4-hydrogen (default)|gemini-4-carbon|my-own-model|Other model…', (await offered()).join('|'))
+    await menu.selectOption('gemini-4-hydrogen')
+    check('and the first model can be gone back to', (await menu.inputValue()) === 'gemini-4-hydrogen' && /"locatorModel":"gemini-4-hydrogen"/.test(await p.evaluate(() => localStorage.getItem('nbr.studio.v1')) || ''))
     await shot(p, '3-find-switch.png')
     await p.click('[role=dialog] button:has-text("Apply edit")')
     await p.waitForFunction(() => /Done in|Done on|Gave up|went wrong|Stopped/.test(document.querySelector('[role=dialog]').innerText), null, { timeout: 90000 })
@@ -228,13 +242,13 @@ async function disturbed(p, before, after, discs) {
     await p.close()
   }
   {
-    // a model only served the older way, and a model id typed by the user
+    // a model only served the older way, and a model picked from the menu
     const located = JSON.stringify({ objects: [{ arrow: 1, label: 'arm', box_2d: box2d }], faces: [] })
     const { p, calls, errors } = await open(browser, kase, { locator: 'Here you go: ' + located, oldWayOnly: true })
     await clickAt(p, m.marks[0].x, m.marks[0].y)
     await p.keyboard.type('remove this')
     await p.locator('[role=dialog] label:has-text("find the object") input').check()
-    await p.fill('[role=dialog] input[aria-label="Gemini model that finds the object"]', 'gemini-4-carbon')
+    await p.selectOption('[role=dialog] select[aria-label="Gemini model that finds the object"]', 'gemini-4-carbon')
     await p.click('[role=dialog] button:has-text("Apply edit")')
     await p.waitForFunction(() => /Done in|Done on|Gave up|went wrong|Stopped/.test(document.querySelector('[role=dialog]').innerText), null, { timeout: 90000 })
     const txt = await p.evaluate(() => document.querySelector('[role=dialog]').innerText)
